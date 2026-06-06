@@ -1,0 +1,309 @@
+#!/bin/bash
+# AI Usage Monitor — Claude Code statusline
+# Line 1: repo ᛘ branch  Model (ctx)  ctx:X%
+# Line 2: 🟢Claude:5hX%/1wX%/Snt1wX%  🟢Codex:5hX%/1wX%  [Mode]
+# Line 3: ⚡N bg  ⏳ bg-job-progress  PR #NNN  ffmpeg
+# Line 4+: bg タスクを 1 行ずつ（🔧 進捗ジョブ=ai-org-progress / ⚙ bash bg=出力スニペット）
+#          N = 総行数（進捗ジョブ + bash bg + ci）で一致
+
+# BASH_SOURCE[0] + readlink でスクリプト実体の絶対パスを解決
+# （dirname "$0" は symlink 経由呼び出し時に symlink の置かれた dir を返すため不可）
+_SCRIPT="${BASH_SOURCE[0]}"
+[ -L "$_SCRIPT" ] && _SCRIPT="$(readlink -f "$_SCRIPT" 2>/dev/null || readlink "$_SCRIPT")"
+_SCRIPT_DIR="$(cd "$(dirname "$_SCRIPT")" && pwd)"
+unset _SCRIPT
+# shellcheck source=lib/cache-path.sh
+source "$_SCRIPT_DIR/lib/cache-path.sh"
+# shellcheck source=lib/bg-status.sh
+source "$_SCRIPT_DIR/lib/bg-status.sh"
+unset _SCRIPT_DIR
+
+# ── stdin JSON（Claude Code が渡す）──────────────────────────
+CLA_5H_REMAINING_PCT=""
+CLA_WEEK_REMAINING_PCT=""
+model_short=""
+ctx_used=""
+ctx_size=0
+cwd=""
+
+if [ ! -t 0 ]; then
+  STDIN_DATA=$(cat)
+  if [ -n "$STDIN_DATA" ]; then
+    # | 区切りで出力することで bash read の空フィールド潰れを防ぐ
+    parsed=$(echo "$STDIN_DATA" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    rl = d.get('rate_limits', {})
+    fh = rl.get('five_hour', {})
+    wk = rl.get('weekly', rl.get('week', {}))
+    m  = d.get('model', {}).get('display_name', '')
+    cw = d.get('context_window', {})
+    cwd = d.get('workspace', {}).get('current_dir', d.get('cwd', ''))
+    print('|'.join([
+        str(fh.get('used_percentage', '')),
+        str(wk.get('used_percentage', '')),
+        m,
+        str(cw.get('used_percentage', '')),
+        str(cw.get('context_window_size', 0)),
+        cwd,
+    ]))
+except Exception:
+    print('|||||')
+" 2>/dev/null)
+    IFS='|' read -r CLA_5H_USED CLA_WEEK_USED model_raw ctx_used ctx_size cwd <<< "$parsed"
+    [ -n "$CLA_5H_USED" ] && \
+      CLA_5H_REMAINING_PCT=$(awk "BEGIN{printf \"%d\", 100-$CLA_5H_USED}")
+    [ -n "$CLA_WEEK_USED" ] && \
+      CLA_WEEK_REMAINING_PCT=$(awk "BEGIN{printf \"%d\", 100-$CLA_WEEK_USED}")
+    model_short="${model_raw#Claude }"
+  fi
+fi
+
+# ── キャッシュ読み込み ────────────────────────────────────────
+if [ -f "$CACHE_FILE" ]; then
+  # shellcheck disable=SC1090
+  source "$CACHE_FILE"
+fi
+
+CDX_5H_REMAINING_PCT=${CDX_5H_REMAINING_PCT:-100}
+CDX_WEEK_REMAINING_PCT=${CDX_WEEK_REMAINING_PCT:-100}
+ROUTING_MODE=${ROUTING_MODE:-normal}
+
+# Claude % の優先順位: OAuth API キャッシュ → stdin JSON → フォールバック
+CACHE_CLA_PCT=${CLA_5H_REMAINING_PCT:-}
+CACHE_CLA_OAUTH_FRESH=${CLA_OAUTH_FRESH:-0}
+
+if [ "$CACHE_CLA_OAUTH_FRESH" = "1" ] && [ -n "$CACHE_CLA_PCT" ]; then
+  CLA_5H_REMAINING_PCT="$CACHE_CLA_PCT"
+elif [ -z "$CLA_5H_REMAINING_PCT" ]; then
+  CLA_5H_REMAINING_MINS=${CLA_5H_REMAINING_MINS:-300}
+  CLA_5H_REMAINING_PCT=$(awk "BEGIN{printf \"%d\", $CLA_5H_REMAINING_MINS/300*100}")
+fi
+
+if [ -z "$CLA_WEEK_REMAINING_PCT" ] && [ -n "${CLA_7D_REMAINING_PCT:-}" ]; then
+  CLA_WEEK_REMAINING_PCT="$CLA_7D_REMAINING_PCT"
+fi
+
+SNT_REMAINING_PCT=${CLA_7D_SONNET_REMAINING_PCT:-}
+
+# ── 色設定 ──────────────────────────────────────────────────
+cyan='\033[36m'
+green='\033[32m'
+yellow='\033[33m'
+magenta='\033[35m'
+dim='\033[2m'
+reset='\033[0m'
+red='\033[31m'
+
+# Claude アイコン
+[ "${CLA_5H_REMAINING_PCT:-100}" -ge 30 ] && CLA_IC="🟢" || CLA_IC="🟡"
+[ "${CLA_5H_REMAINING_PCT:-100}" -lt 10 ] && CLA_IC="🔴"
+
+# Codex アイコン
+CDX_PCT=${CDX_5H_REMAINING_PCT%.*}
+[ "${CDX_PCT:-100}" -ge 50 ] && CDX_IC="🟢" || CDX_IC="🟡"
+[ "${CDX_PCT:-100}" -lt 20 ] && CDX_IC="🔴"
+
+# モードラベル（バランスギャップ表示付き）
+_gap=${BALANCE_GAP:-0}
+[ "$_gap" -gt 0 ] && _gap_str="+${_gap}%" || _gap_str="${_gap}%"
+case "$ROUTING_MODE" in
+  claude_critical) MODE=" 🚨[Claude-Critical]" ;;
+  save_claude)     MODE=" ⚠️[Save-Claude]" ;;
+  codex_burn)      MODE=" 🔥[Burn-Codex]" ;;
+  claude_burn)     MODE=" 🔥[Burn-Claude]" ;;
+  codex_first)     MODE=" [Codex-First ${_gap_str}]" ;;
+  protect_codex)   MODE=" [Codex-Save]" ;;
+  claude_first)    MODE=" [Claude-First ${_gap_str}]" ;;
+  normal)          MODE=" [Balanced ${_gap_str}]" ;;
+  *)               MODE=" [Balanced]" ;;
+esac
+
+# ── ブランチ・ディレクトリ ────────────────────────────────────
+dir=""
+branch=""
+if [ -n "$cwd" ] && [ -d "$cwd" ]; then
+  dir=$(basename "$cwd")
+  branch=$(git -C "$cwd" -c core.fsync=false symbolic-ref --short HEAD 2>/dev/null \
+    || git -C "$cwd" rev-parse --short HEAD 2>/dev/null \
+    || echo "")
+fi
+
+# ── ctx サイズラベル ─────────────────────────────────────────
+ctx_label=""
+if [ -n "$ctx_size" ] && [ "$ctx_size" -gt 0 ] 2>/dev/null; then
+  if [ "$ctx_size" -ge 1000000 ]; then
+    ctx_label=" ($(awk "BEGIN{printf \"%gM\", $ctx_size/1000000}") ctx)"
+  elif [ "$ctx_size" -ge 1000 ]; then
+    ctx_label=" ($(awk "BEGIN{printf \"%gk\", $ctx_size/1000}") ctx)"
+  fi
+fi
+
+# ── Line 1 ───────────────────────────────────────────────────
+parts=""
+
+# repo ᛘ branch
+if [ -n "$dir" ]; then
+  parts="${cyan}${dir}${reset}"
+  if [ -n "$branch" ]; then
+    parts="${parts}  ${dim}ᛘ${reset} ${green}${branch}${reset}"
+  fi
+fi
+
+# Model + ctx size
+if [ -n "$model_short" ]; then
+  parts="${parts}  ${magenta}${model_short}${ctx_label}${reset}"
+fi
+
+# Context used %
+if [ -n "$ctx_used" ] && [[ "$ctx_used" =~ ^[0-9.]+$ ]]; then
+  ctx_int=$(printf '%.0f' "$ctx_used")
+  if [ "$ctx_int" -ge 100 ]; then
+    parts="${parts}  ${dim}ctx:${ctx_int}%${reset}"
+  elif [ "$ctx_int" -ge 80 ]; then
+    parts="${parts}  ${red}ctx:${ctx_int}%${reset}"
+  elif [ "$ctx_int" -ge 50 ]; then
+    parts="${parts}  ${yellow}ctx:${ctx_int}%${reset}"
+  else
+    parts="${parts}  ${dim}ctx:${ctx_int}%${reset}"
+  fi
+fi
+
+# Claude リセット残り時間ラベル（7d枠・常に時間単位）
+CLA_RESET_LABEL=""
+_cla_h=${CLA_7D_HOURS_UNTIL_RESET:-0}
+[ "$_cla_h" -gt 0 ] 2>/dev/null && CLA_RESET_LABEL=" ${dim}↺${_cla_h}h${reset}"
+
+# Claude %（OAuth 優先）— 絵文字後スペース + ラベルをシアンで色付け
+if [ -n "$CLA_WEEK_REMAINING_PCT" ] && [ -n "$SNT_REMAINING_PCT" ]; then
+  CLA_DISPLAY="${CLA_IC} ${cyan}Claude${reset}:5h${CLA_5H_REMAINING_PCT}%/1w${CLA_WEEK_REMAINING_PCT}%/Snt1w${SNT_REMAINING_PCT}%${CLA_RESET_LABEL}"
+elif [ -n "$CLA_WEEK_REMAINING_PCT" ]; then
+  CLA_DISPLAY="${CLA_IC} ${cyan}Claude${reset}:5h${CLA_5H_REMAINING_PCT}%/1w${CLA_WEEK_REMAINING_PCT}%${CLA_RESET_LABEL}"
+else
+  CLA_DISPLAY="${CLA_IC} ${cyan}Claude${reset}:5h${CLA_5H_REMAINING_PCT}%${CLA_RESET_LABEL}"
+fi
+
+# Codex % — 絵文字後スペース + ラベルを黄色で色付け
+CDX_RESET_LABEL=""
+_cdx_week_int=${CDX_WEEK_REMAINING_PCT%.*}
+if [ "${_cdx_week_int:-100}" -le 80 ] && [ "${CDX_HOURS_UNTIL_RESET:-0}" -gt 0 ] 2>/dev/null; then
+  CDX_RESET_LABEL=" ${dim}↺${CDX_HOURS_UNTIL_RESET}h${reset}"
+fi
+CDX_DISPLAY="${CDX_IC} ${yellow}Codex${reset}:5h${CDX_5H_REMAINING_PCT%.*}%/1w${CDX_WEEK_REMAINING_PCT%.*}%${CDX_RESET_LABEL}"
+
+[ -n "$parts" ] && printf "%b\n" "$parts"
+
+# ── Line 2: Claude/Codex usage ──────────────────────────────
+# 最終更新時刻（キャッシュ TIMESTAMP → HH:MM）
+last_update=""
+if [ -n "${TIMESTAMP:-}" ] && [ "$TIMESTAMP" -gt 0 ] 2>/dev/null; then
+  last_update="  ${dim}↻$(date -r "$TIMESTAMP" +%H:%M)${reset}"
+fi
+usage_line="${CLA_DISPLAY} ${CDX_DISPLAY}${MODE}${last_update}"
+printf "%b\n" "$usage_line"
+
+# ── Line 3: bg tasks / PR / ffmpeg / ai-org-progress ────────
+line3=""
+
+# Background tasks — owner 2026-06-07: bg ごとに 1 行（縦に伸びてOK）。
+# ⚡N bg の N = 表示行数（進捗ジョブ + 進捗なし bash bg + ci）で一致させる。
+now_epoch=$(date +%s)
+_bg_age() { local a=$1; [ "$a" -lt 0 ] && a=0; if [ "$a" -lt 60 ]; then printf '%ss' "$a"; else printf '%sm' "$((a / 60))"; fi; }
+
+# (a) 進捗報告ジョブ（subagent）= ai-org-progress のリッチ行（job ごと改行）
+prog_rows=""
+prog_count=0
+if [ -x "$HOME/.local/bin/ai-org-progress" ]; then
+  prog_rows=$("$HOME/.local/bin/ai-org-progress" --short 2>/dev/null)
+  [ -n "$prog_rows" ] && prog_count=$(printf '%s\n' "$prog_rows" | grep -c .)
+fi
+
+# (b) 進捗を持たない bash background（run_in_background）= 短い id の .output
+#     agent の .output（_AGENT_ID_MINLEN 文字以上の長い id）は (a) の 🔧 行で表示済みのため除外。
+#     表示は mtime 新しい順で安定（refresh ごとの並び替え flicker 防止）。縦の伸びは許容。
+bash_rows=""
+bash_count=0
+_ESC=$(printf '\033')
+_AGENT_ID_MINLEN=14   # agent .output は ~17文字 hex、bash bg は ~9文字。14 で分離
+_out_dir="/private/tmp/claude-$(id -u)"
+if [ -d "$_out_dir" ]; then
+  while IFS= read -r _of; do
+    [ -n "$_of" ] || continue
+    _bid=$(basename "$_of" .output | LC_ALL=C tr -d '\000-\037\134')
+    [ "${#_bid}" -ge "$_AGENT_ID_MINLEN" ] && continue
+    _mt=$(stat -f%m "$_of" 2>/dev/null || echo "$now_epoch")
+    # 作業内容スニペット: 出力の最新の非空行（ANSI 色除去 → 制御文字/バックスラッシュ除去・48字）
+    _snip=$(tail -n 5 "$_of" 2>/dev/null | sed -E "s/${_ESC}\[[0-9;]*m//g" \
+            | grep -v '^[[:space:]]*$' | tail -1 | LC_ALL=C tr -d '\000-\037\134')
+    _snip="${_snip:0:48}"
+    if [ -n "$_snip" ]; then
+      bash_rows="${bash_rows}"$'\n'"   ${dim}⚙ ${_bid} $(_bg_age $((now_epoch - _mt)))${reset} ${_snip}"
+    else
+      bash_rows="${bash_rows}"$'\n'"   ${dim}⚙ ${_bid} $(_bg_age $((now_epoch - _mt))) (no output yet)${reset}"
+    fi
+    bash_count=$((bash_count + 1))
+  done < <(find "$_out_dir" -name "*.output" -mmin -5 -exec stat -f '%m %N' {} \; 2>/dev/null | sort -rn | cut -d' ' -f2-)
+fi
+
+# (c) /tmp/ci_ プロセス
+ci_rows=""
+ci_count=0
+while IFS= read -r _pid; do
+  [ -n "$_pid" ] || continue
+  ci_rows="${ci_rows}"$'\n'"   ${dim}⚙ ci:${_pid}${reset}"
+  ci_count=$((ci_count + 1))
+done < <(pgrep -f "/tmp/ci_" 2>/dev/null)
+
+bg_total=$((prog_count + bash_count + ci_count))
+if [ "$bg_total" -gt 0 ]; then
+  line3="${yellow}⚡${bg_total} bg${reset}"
+else
+  line3="${dim}⚡0 bg${reset}"
+fi
+
+# Background job progress message (#44) — 状態ファイルが新鮮なら表示
+# bg-status は cwd の git ルートでスコープされるため、statusline プロセスの PWD ではなく
+# stdin JSON の $cwd（= ワークスペース）で解決する（別 repo の進捗が混線しないように）。
+_bg_msg=$( if [ -n "$cwd" ] && [ -d "$cwd" ]; then cd "$cwd" 2>/dev/null || true; fi; bg_status_render )
+[ -n "$_bg_msg" ] && line3="${line3}  ${cyan}${_bg_msg}${reset}"
+
+# ffmpeg 進捗
+ffmpeg_pid=$(pgrep -x ffmpeg 2>/dev/null | head -1)
+if [ -n "$ffmpeg_pid" ]; then
+  ff_elapsed=$(ps -p "$ffmpeg_pid" -o etime= 2>/dev/null | tr -d ' ')
+  ff_outfile=$(lsof -p "$ffmpeg_pid" 2>/dev/null | grep -E '\.(mp4|mov|wav)$' | tail -1 | awk '{print $NF}')
+  ff_size=""
+  if [ -n "$ff_outfile" ] && [ -f "$ff_outfile" ]; then
+    ff_bytes=$(stat -f%z "$ff_outfile" 2>/dev/null || echo "0")
+    if [ "$ff_bytes" -ge 1073741824 ] 2>/dev/null; then
+      ff_size=$(awk "BEGIN{printf \"%.1fG\", $ff_bytes/1073741824}")
+    elif [ "$ff_bytes" -ge 1048576 ] 2>/dev/null; then
+      ff_size=$(awk "BEGIN{printf \"%.0fM\", $ff_bytes/1048576}")
+    fi
+  fi
+  ff_expect=""
+  [ -f /tmp/ffmpeg_expected_size ] && ff_expect=$(cat /tmp/ffmpeg_expected_size 2>/dev/null)
+  if [ -n "$ff_size" ] && [ -n "$ff_expect" ]; then
+    line3="${line3}  ${magenta}🎬 ffmpeg ${ff_elapsed} ${ff_size}/${ff_expect}${reset}"
+  elif [ -n "$ff_size" ]; then
+    line3="${line3}  ${magenta}🎬 ffmpeg ${ff_elapsed} ${ff_size}${reset}"
+  else
+    line3="${line3}  ${magenta}🎬 ffmpeg ${ff_elapsed}${reset}"
+  fi
+fi
+
+# PR
+if [ -n "$branch" ] && command -v gh &>/dev/null; then
+  pr_num=$(timeout 1 gh pr list --head "$branch" --json number --jq '.[0].number' 2>/dev/null)
+  if [ -n "$pr_num" ]; then
+    line3="${line3}  ${dim}PR #${pr_num}${reset}"
+  fi
+fi
+
+# bg タスクの行を末尾に追加（1タスク1行）:
+#   進捗ジョブ（リッチ）→ 進捗なし bash bg → ci プロセス
+[ -n "$prog_rows" ] && line3="${line3}"$'\n'"${prog_rows}"
+line3="${line3}${bash_rows}${ci_rows}"
+
+[ -n "$line3" ] && printf "%b\n" "$line3"

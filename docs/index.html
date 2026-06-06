@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-usage-monitor — Documentation</title>
+<style>
+  :root{
+    --bg:#ffffff; --sidebar:#f6f8fa; --border:#d0d7de; --fg:#1f2328; --muted:#656d76;
+    --accent:#0969da; --code-bg:#0d1117; --code-fg:#e6edf3; --kbd:#eff1f3;
+    --green:#1a7f37; --red:#cf222e; --yellow:#9a6700;
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#0d1117; --sidebar:#0d1117; --border:#30363d; --fg:#e6edf3; --muted:#8b949e;
+      --accent:#58a6ff; --kbd:#161b22; --green:#3fb950; --red:#f85149; --yellow:#d29922; }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Noto Sans JP",Segoe UI,sans-serif;
+    line-height:1.7;font-size:16px}
+  a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+  .layout{display:grid;grid-template-columns:280px 1fr;max-width:1280px;margin:0 auto;min-height:100vh}
+
+  /* sidebar */
+  aside{border-right:1px solid var(--border);background:var(--sidebar);padding:24px 0;
+    position:sticky;top:0;height:100vh;overflow-y:auto}
+  aside .brand{padding:0 24px 16px;border-bottom:1px solid var(--border);margin-bottom:12px}
+  aside .brand b{font-size:1.15rem} aside .brand span{display:block;color:var(--muted);font-size:.85rem;margin-top:4px}
+  nav a{display:block;padding:5px 24px;color:var(--muted);font-size:.92rem;border-left:2px solid transparent}
+  nav a:hover{color:var(--fg);text-decoration:none}
+  nav a.active{color:var(--accent);border-left-color:var(--accent);background:rgba(9,105,218,.06);font-weight:600}
+  nav .grp{padding:14px 24px 4px;font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:700}
+
+  /* content */
+  main{padding:40px 56px 120px;max-width:900px;overflow:hidden}
+  h1{font-size:2.4rem;margin:.2em 0 .1em;letter-spacing:-.02em}
+  h2{font-size:1.6rem;margin:2.4em 0 .6em;padding-bottom:.3em;border-bottom:1px solid var(--border);scroll-margin-top:20px}
+  h3{font-size:1.2rem;margin:1.8em 0 .4em;scroll-margin-top:20px}
+  p{margin:.8em 0}
+  .tagline{font-size:1.15rem;color:var(--fg);font-weight:600;margin:.4em 0 1em}
+  .lead{color:var(--muted)}
+  .badge{display:inline-block;background:var(--kbd);border:1px solid var(--border);color:var(--muted);
+    font-size:.8rem;padding:3px 10px;border-radius:999px;font-family:var(--mono);margin-bottom:14px}
+  img.demo{max-width:100%;border:1px solid var(--border);border-radius:10px;margin:1em 0;display:block}
+  pre{background:var(--code-bg);color:var(--code-fg);border-radius:10px;padding:16px 18px;overflow:auto;
+    font-family:var(--mono);font-size:.86rem;line-height:1.6;margin:1em 0}
+  code{font-family:var(--mono);font-size:.86em;background:var(--kbd);padding:.15em .4em;border-radius:5px}
+  pre code{background:none;padding:0;font-size:1em}
+  table{border-collapse:collapse;width:100%;margin:1em 0;font-size:.92rem;display:block;overflow-x:auto}
+  th,td{border:1px solid var(--border);padding:8px 12px;text-align:left;vertical-align:top}
+  th{background:var(--sidebar);font-weight:600;white-space:nowrap}
+  blockquote{margin:1em 0;padding:.6em 1.1em;border-left:4px solid var(--accent);
+    background:rgba(9,105,218,.06);color:var(--muted);border-radius:0 8px 8px 0}
+  blockquote b{color:var(--fg)}
+  ul{margin:.6em 0;padding-left:1.4em} li{margin:.3em 0}
+  hr{border:none;border-top:1px solid var(--border);margin:2.4em 0}
+  .ok{color:var(--green);font-weight:600} .ng{color:var(--red);font-weight:600} .wn{color:var(--yellow);font-weight:600}
+  .g{color:var(--green)} .y{color:var(--yellow)} .r{color:var(--red)} .b{color:var(--accent)} .dim{color:var(--muted)}
+  .callout{border:1px solid var(--border);border-radius:10px;padding:14px 18px;margin:1.2em 0;background:var(--sidebar)}
+  .callout.warn{border-left:4px solid var(--yellow)}
+  @media (max-width:880px){
+    .layout{grid-template-columns:1fr} aside{display:none} main{padding:24px}
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<aside>
+  <div class="brand"><b>ai-usage-monitor</b><span>Claude Code / Codex 使用量モニター</span></div>
+  <nav id="toc">
+    <div class="grp">概要</div>
+    <a href="#overview">はじめに</a>
+    <a href="#why">なぜ作ったか</a>
+    <a href="#features">主な機能</a>
+    <a href="#arch">アーキテクチャ</a>
+    <div class="grp">表示</div>
+    <a href="#display">表示の詳細</a>
+    <a href="#statusline">statusLine の仕組み</a>
+    <a href="#bgstatus">バックグラウンド進捗</a>
+    <a href="#progress">進捗の数字の作り方と限界</a>
+    <a href="#routing">ルーティング</a>
+    <div class="grp">導入</div>
+    <a href="#setup">セットアップ</a>
+    <a href="#plugin">Plugin にしなかった理由</a>
+    <div class="grp">リファレンス</div>
+    <a href="#datasource">データソース</a>
+    <a href="#security">セキュリティ</a>
+    <a href="#test">テスト</a>
+    <a href="#files">ファイル構成</a>
+    <a href="#cache">キャッシュ仕様</a>
+    <a href="#trouble">トラブルシューティング</a>
+    <a href="#macos">macOS 専用の理由</a>
+  </nav>
+</aside>
+
+<main>
+  <section id="overview">
+    <span class="badge">macOS 専用</span>
+    <h1>ai-usage-monitor</h1>
+    <p class="tagline">Claude Code と Codex（OpenAI）のサブスク使用量をリアルタイムに可視化し、残量に応じて「どちらに仕事を振るか」を自動提案する macOS 常駐ツール。</p>
+    <p class="lead">Claude Code の <b>statusLine</b>（ターミナル最下部）と <b>SwiftBar</b>（メニューバー）に、5h・週次の残量％、トークン数・コスト、実行中のバックグラウンドジョブの進捗を常時表示する。</p>
+    <img class="demo" src="demo.gif" alt="ai-usage-monitor デモ — statusLine に使用量とバックグラウンド進捗が表示される様子">
+    <pre><code>ai-org  ᛘ main  Sonnet 4.6 (200k ctx)  <span class="y">ctx:32%</span>
+<span class="g">🟢 Claude</span>:5h89%/1w90%/Snt1w86%  <span class="g">🟢 Codex</span>:5h99%/1w99% [Balanced +2%]  <span class="dim">↻12:05</span>
+<span class="y">⚡3 bg</span>  <span class="b">⏳ CI 3/5 passing</span>
+<span class="b">🔧 ri-pr42 「RI レビュー」</span> ████░░░░ 50% elapsed=12s last=3s <span class="g">🟢 active</span>
+   <span class="dim">⚙ bui49k40l 8s  npm test passing 12/30 ...</span></code></pre>
+    <blockquote><b>macOS 専用</b> — <code>date -v</code> / <code>date -r</code>（BSD date）・<code>id -u</code> 形式・launchd を使用しており、Linux / Windows では動作しません。</blockquote>
+  </section>
+
+  <section id="why">
+    <h2>なぜ作ったか</h2>
+    <p>Claude Code（Max プラン）と Codex（Plus プラン）を併用していると、次の課題が日常的に起きる。</p>
+    <ul>
+      <li><b>使用量が見えない。</b>「このタスクを重い Claude に投げて 5h 枠を使い切って大丈夫か？」が判断できない。Web 管理画面を毎回見るのは非現実的。</li>
+      <li><b>どちらに振るべきか分からない。</b>Claude が枯渇気味なら調査・要約は Codex に回したい。だが残量を把握していないと「止まってから気づく」。</li>
+      <li><b>バックグラウンドの仕事が見えない。</b>subagent やビルド・テストを並列で走らせると「動いているのか・スタックしているのか」分からない。</li>
+    </ul>
+    <p>このツールは <b>「残量」と「進行中の仕事」を常に視界に入れる</b>ことで、これらを解決する。判断のための情報を、判断する場所（ターミナル）に置く。</p>
+  </section>
+
+  <section id="features">
+    <h2>主な機能</h2>
+    <table>
+      <tr><th>機能</th><th>説明</th></tr>
+      <tr><td>使用量の常時表示</td><td>Claude（5h / 週次全モデル / 週次 Sonnet）と Codex（5h / 週次）の残量％を statusLine・メニューバーに表示</td></tr>
+      <tr><td>ルーティング自動提案</td><td>残量に応じて Balanced / Codex-First / Claude-First / Codex-Save / Save-Claude 等を算出し「今はどちらに振るべきか」を示す</td></tr>
+      <tr><td>バックグラウンド進捗</td><td>実行中の subagent / bash ジョブを <b>1タスク1行</b>で表示。進捗バー・経過時間・スタック検知・作業内容スニペット付き</td></tr>
+      <tr><td>任意ジョブの進捗注入</td><td><code>bg-status.sh</code> で CI/E2E/ビルド等の進捗を statusLine に流せる（job 別・複数同時）</td></tr>
+      <tr><td>コスト・トークン可視化</td><td>ccusage 連携で 7日 / 当日のトークン数・コストを表示（SwiftBar）</td></tr>
+      <tr><td>アイドル中も更新</td><td><code>refreshInterval</code> 対応で、バックグラウンドジョブ待ちの間も statusLine が定期更新される</td></tr>
+    </table>
+  </section>
+
+  <section id="arch">
+    <h2>アーキテクチャ</h2>
+    <p>「データ収集」と「表示」を分離し、収集は 5 分ごとに launchd が <b>キャッシュファイル</b>へ書き、各表示先はキャッシュを読むだけにしている。表示のたびに API を叩かないので軽量で、API quota も消費しない。</p>
+    <pre><code> データソース                 収集 (launchd 5分毎)        表示
+ ─────────────────           ──────────────────         ─────────────────────────
+ Anthropic OAuth API ─┐
+ (5h / 週次 残量%)      │
+                      ├─→  cache-update.sh ─→ cache ─┬─→ statusline.sh   (Claude Code)
+ ccusage (JSONL)      ─┤      (KV file へ)            ├─→ ai_usage.5m.sh  (SwiftBar)
+ (トークン/コスト)       │                             └─→ session-start  (hook)
+ ~/.codex/sessions ───┘
+ (rate_limits)
+
+ subagent / bash job ─→ ai-org-progress / bg-status.sh ─→ 状態ファイル ─→ statusline の 🔧/⏳/⚙ 行</code></pre>
+    <ul>
+      <li><b>収集（<code>cache-update.sh</code>）</b>: launchd が 5 分ごとに起動。OAuth API・ccusage・Codex セッション JSONL を読み、<code>$DARWIN_USER_TEMP_DIR/ai-usage-monitor/cache</code> に <code>KEY=VALUE</code> で書く。</li>
+      <li><b>表示</b>: statusLine / SwiftBar / SessionStart hook はキャッシュを <code>source</code> して読むだけ（高速・API 非依存）。</li>
+      <li><b>進捗は別系統</b>: バックグラウンド進捗は <code>/tmp/ai-org-progress/</code>（subagent 用）と <code>~/.claude/bg_status/</code>（任意ジョブ用）の状態ファイルを statusLine が直接読む。こちらはリアルタイム。</li>
+    </ul>
+  </section>
+
+  <section id="display">
+    <h2>表示の詳細</h2>
+    <h3>1. Claude Code statusLine（複数行）</h3>
+    <pre><code>ai-org  ᛘ main  Sonnet 4.6 (200k ctx)  ctx:32%
+🟢 Claude:5h89%/1w90%/Snt1w86%  🟢 Codex:5h99%/1w99% [Balanced +2%]  ↻12:05
+⚡3 bg  ⏳ CI 3/5 passing
+🔧 ri-pr42 「RI レビュー」 ████░░░░ 50% elapsed=12s last=3s 🟢 active
+   ⚙ bui49k40l 8s  npm test passing 12/30 ...</code></pre>
+    <table>
+      <tr><th>表示</th><th>意味</th></tr>
+      <tr><td><code>ai-org ᛘ main</code></td><td>リポジトリ名・現在のブランチ</td></tr>
+      <tr><td><code>Sonnet 4.6 (200k ctx)</code></td><td>使用中のモデルとコンテキストウィンドウサイズ</td></tr>
+      <tr><td><code>ctx:32%</code></td><td>コンテキスト使用率（50%+ 黄 / 80%+ 赤 / 100%+ dim）</td></tr>
+      <tr><td><code>🟢 Claude:5h89%/1w90%/Snt1w86%</code></td><td>Claude 5h残 / 週次全モデル残 / 週次 Sonnet残（🟢≥30% 🟡&lt;30% 🔴&lt;10%）</td></tr>
+      <tr><td><code>🟢 Codex:5h99%/1w99%</code></td><td>Codex 5h残 / 週次残（🟢≥50% 🟡&lt;50% 🔴&lt;20%）</td></tr>
+      <tr><td><code>[Balanced +2%]</code></td><td>ルーティングモードとバランスギャップ</td></tr>
+      <tr><td><code>↻12:05</code></td><td>キャッシュ最終更新時刻</td></tr>
+      <tr><td><code>⚡N bg</code></td><td>バックグラウンドタスク数（= 以下の行数と一致）</td></tr>
+      <tr><td><code>⏳ &lt;msg&gt; · &lt;msg&gt;</code></td><td><code>bg-status.sh</code> で流した任意ジョブの進捗（新鮮な間だけ集約表示）</td></tr>
+      <tr><td><code>🔧 &lt;id&gt;「ラベル」&lt;バー&gt; %</code></td><td>進捗報告ジョブ（subagent / ai-org-progress）を 1 行ずつ</td></tr>
+      <tr><td><code>⚙ &lt;id&gt; &lt;経過&gt; &lt;出力&gt;</code></td><td>進捗を持たない bash background を 1 行ずつ（最新出力行をスニペット表示）</td></tr>
+    </table>
+
+    <h3>2. SwiftBar メニューバー</h3>
+    <pre><code>🟢 Claude 89%/週90%/Sonnet86% | 🟢 Codex 99%/週99%</code></pre>
+    <p>クリックでドロップダウン:</p>
+    <pre><code>Claude (Max 20x)
+  セッション(5h)  残89% (11%使用)
+  週次 全モデル   残90% (10%使用)
+  週次 Sonnetのみ 残86% (14%使用)
+  7d    2.1G tokens / $0.00
+──────────────────────────────
+Codex (Plus)
+  5h窓  🟢 残り 99% リセット: 14:30
+  週次  🟢 残り 99% リセット: 05/19
+──────────────────────────────
+🟢 [Balanced]
+──────────────────────────────
+最終更新: 12:05
+今すぐ更新</code></pre>
+
+    <h3>3. SessionStart フック</h3>
+    <p>セッション開始時に使用量サマリとルーティング指針を表示する。</p>
+    <pre><code>[AI使用量司令塔] 🟢 [Balanced]
+Claude 5h:残89% 週:残90% Sonnet週:残86%
+Codex 5h:残99% 週:残99%</code></pre>
+  </section>
+
+  <section id="statusline">
+    <h2>statusLine の仕組み（Claude Code 連携）</h2>
+    <p>Claude Code の statusLine は「<b>任意のシェルスクリプトを実行し、その標準出力を最下部に表示する</b>」機能。スクリプトには stdin で JSON（モデル名・コンテキスト使用率・workspace パス等）が渡る。</p>
+    <ul>
+      <li><b>複数行対応</b>: スクリプトが複数行を出力すると、各行がそのまま行として表示される。本ツールはこれを利用して「bg タスクを 1 タスク 1 行」で見せている。</li>
+      <li><b>更新タイミング</b>: 標準ではイベント駆動（アシスタントの新メッセージ後・300ms デバウンス）。<b>バックグラウンドジョブ待ちでアイドルになると更新が止まる</b>ため、<code>refreshInterval</code>（秒・最小 1）を設定して定期更新させる。</li>
+      <li><b>キーは camelCase</b>: <code>"statusLine"</code>。<code>"statusline"</code>（小文字）では読まれない。</li>
+    </ul>
+    <pre><code>// ~/.claude/settings.json
+"statusLine": {
+  "type": "command",
+  "command": "/path/to/ai-usage-monitor/scripts/statusline.sh",
+  "refreshInterval": 2,
+  "padding": 1
+}</code></pre>
+  </section>
+
+  <section id="bgstatus">
+    <h2>バックグラウンドジョブ進捗の注入（bg-status.sh）</h2>
+    <p>長時間のバックグラウンドジョブ（CI/E2E 監視・ビルド・テスト）から進捗を statusLine に流せる。<b>job ごとに key を付けて複数同時表示</b>できる。</p>
+    <pre><code>scripts/bg-status.sh set ci  "CI 3/5 passing"   # job key = ci
+scripts/bg-status.sh set e2e "E2E 2/4"          # job key = e2e
+# → statusLine に「⏳ CI 3/5 passing · E2E 2/4」
+
+scripts/bg-status.sh set "building app"          # key 省略 = default key（後方互換）
+scripts/bg-status.sh clear ci                    # ci job のみ消す
+scripts/bg-status.sh clear                       # 全 job を消す</code></pre>
+    <table>
+      <tr><th>特性</th><th>内容</th></tr>
+      <tr><td>job 別・複数同時</td><td>key ごとに別ファイルで管理するため、複数ジョブが同時に書いても競合しない</td></tr>
+      <tr><td>プロジェクトスコープ</td><td>cwd の git リポジトリルートごとに分かれ、別リポジトリのセッションに進捗が漏れない</td></tr>
+      <tr><td>自動失効</td><td><code>CLAUDE_BG_STATUS_FRESH_SECS</code>（既定 600 秒）超の進捗は自動で非表示・ファイルも reap</td></tr>
+      <tr><td>安全</td><td>表示時に ANSI エスケープ・制御文字を除去（statusLine への注入・表示崩れを防止）。key はファイル名にサニタイズされパストラバーサル不可</td></tr>
+      <tr><td>atomic 書き込み</td><td><code>mktemp</code> → <code>mv</code> で、statusLine が読む瞬間の空・部分表示を防ぐ</td></tr>
+    </table>
+    <p>環境変数: <code>CLAUDE_BG_STATUS_DIR</code>（基底ディレクトリ）/ <code>CLAUDE_BG_STATUS_FRESH_SECS</code>（新鮮判定秒）/ <code>CLAUDE_BG_STATUS_MAX_JOBS</code>（同時表示上限・既定 3・超過は <code>+N</code>）/ <code>CLAUDE_BG_STATUS_MAX_CHARS</code>（表示最大文字数・既定 200）。</p>
+  </section>
+
+  <section id="progress">
+    <h2>進捗の数字はどう作っているか（と、その限界）</h2>
+    <p>statusLine の <code>60%</code> や <code>████░░░░</code>、<code>1/3</code> といった進捗は <b>自動計測ではなく、呼び出し側（エージェント）の自己申告</b>で成り立っている。設計上の割り切りと限界を明記する。</p>
+
+    <h3>数字の出どころ</h3>
+    <pre><code>ai-org-progress write &lt;id&gt; &lt;current&gt; &lt;total&gt; "&lt;label&gt;"</code></pre>
+    <p><code>current</code>（今いくつ）と <code>total</code>（全部でいくつ）を<b>呼び出し側が渡す</b>。subagent を dispatch する際にプロンプトへ「進捗 pin」を埋め込み、マイルストーン到達時にエージェント自身が書き込む（<code>enforce_subagent_progress</code> フックが pin 無し dispatch を弾く）。</p>
+    <pre><code>ai-org-progress write ri-pr48 1 3 "差分読み込み"
+ai-org-progress write ri-pr48 2 3 "レビュー投稿"
+ai-org-progress write ri-pr48 3 3 "判定"</code></pre>
+    <p>表示される数字はこの JSON（<code>{current,total,label,started,updated,parent}</code>）と時刻から算出する。</p>
+    <table>
+      <tr><th>表示</th><th>計算</th></tr>
+      <tr><td><code>60%</code></td><td><code>current / total × 100</code></td></tr>
+      <tr><td><code>████░░░░</code></td><td><code>current / total × 幅</code> ブロック</td></tr>
+      <tr><td><code>elapsed=2s</code></td><td><code>now − started</code></td></tr>
+      <tr><td><code>last=2s</code></td><td><code>now − updated</code>（最後の write からの経過）</td></tr>
+      <tr><td><code>🟢 active</code> / <code>⚠️ stuck?</code></td><td><code>now − updated</code> が 90 秒以内なら active / 超で stuck</td></tr>
+      <tr><td>親（root）の集約値</td><td>子孫の <code>current/total</code> を合算</td></tr>
+    </table>
+    <p>つまり数字の正体は「<b>エージェントが宣言したステップ番号</b>（self-reported milestone）」であり、実作業量を測ったものではない。</p>
+
+    <h3>進捗を「数字」にしにくいタスク</h3>
+    <table>
+      <tr><th>類型</th><th>例</th><th>なぜ % が嘘になるか</th></tr>
+      <tr><td>探索・調査</td><td>バグ原因特定・コード探索</td><td>終わるまで「あと何ステップか」が分からず total を決められない</td></tr>
+      <tr><td>長い単一処理</td><td><code>xcodebuild</code> / ffmpeg / 大きな test run</td><td>中身が 1 ステップで <code>0/1 → 1/1</code> しか刻めない</td></tr>
+      <tr><td>待ち</td><td>CI 完了待ち・deploy 待ち</td><td>進捗が線形でない</td></tr>
+      <tr><td>品質・創作</td><td>コピーを書く・設計を練る</td><td>自然な単位がない</td></tr>
+    </table>
+    <p>これらを無理に milestone 化すると <code>total=2</code>「読込/判定」のように<b>恣意的</b>になり、% は実態を測らなくなる。</p>
+
+    <h3>「% に固執しない」2 モード</h3>
+    <p><b>(1) indeterminate（不定）モード</b> — <code>total=0</code> で書くと % を出さず <code>cur/?</code> 表示になる。数を諦めて<b>ラベルを heartbeat 更新</b>する。</p>
+    <pre><code>ai-org-progress write dbg 0 0 "原因調査中: AVAudioSession 周辺"
+ai-org-progress write dbg 0 0 "原因特定: setActive の順序"</code></pre>
+    <p>→ 数字の代わりに <code>last=Xs</code>（最終更新からの経過）と <code>🟢 active / ⚠️ stuck?</code>（生死）が「ちゃんと動いている」を伝える。</p>
+    <p><b>(2) output-tail モード（<code>⚙</code> 行）</b> — <code>run_in_background</code> の長い処理は % を出さず、<code>.output</code> の<b>最新行をそのままスニペット表示</b>する。ログ自体が進捗を語るタスク（ビルド・テスト・ダウンロード）はこれが最も正直。</p>
+    <pre><code>⚙ b8a8262ps 0s  ビルド中: モジュール 6/8 をコンパイル...</code></pre>
+
+    <h3>設計方針</h3>
+    <blockquote><b>多くのタスクで「%」は間違った抽象。</b>「今なにをしているか（label / ログ末尾）」＋「生きているか（last / stuck）」の方が、嘘がなく実用的。</blockquote>
+    <p>milestone % が向くのは「ステップ数が事前に確定できる定型タスク」（PR レビューの RI→SI→BCI→… 等）だけ。それ以外は indeterminate か output-tail に倒すのが正解。</p>
+
+    <h3>残る穴（正直に）</h3>
+    <p>長い単一処理が<b>無申告・無出力</b>だと、90 秒で <code>⚠️ stuck?</code> の<b>誤判定</b>が出る（本当は動いている）。回避策は「定期 heartbeat を書く」か「<code>run_in_background</code> で走らせてログ末尾を <code>⚙</code> で見せる」。完全自動の「真の進捗推定」は持っていない（原理的に持てない領域）。</p>
+  </section>
+
+  <section id="routing">
+    <h2>ルーティングモード</h2>
+    <p>残量から「どちらに振るべきか」を <code>cache-update.sh</code> が自動算出する（<code>statusline.sh</code> がラベル表示）。判定の核は <b>バランスギャップ</b>（<code>Claude週次残% − Codex週次残%</code>）だが、その手前に <b>Claude 保護</b>・<b>Codex 保護</b>・<b>Burn（使い切れない余剰の積極消費）</b> が優先される。下表は<b>上から優先</b>で評価される。</p>
+    <table>
+      <tr><th>モード</th><th>ラベル</th><th>条件（上から優先評価）</th><th>指針</th></tr>
+      <tr><td class="r">claude_critical</td><td>🚨 [Claude-Critical]</td><td>Claude 週次残 &lt; 危機閾値</td><td>緊急。全力で Codex へ逃がす</td></tr>
+      <tr><td class="wn">save_claude</td><td>⚠️ [Save-Claude]</td><td>Claude 週次残 &lt; 温存閾値</td><td>Codex 最大活用で Claude を温存</td></tr>
+      <tr><td class="wn">protect_codex</td><td>[Codex-Save]</td><td>Codex 5h残 &lt; 20% または 週次残 &lt; 動的閾値</td><td>Codex 枯渇 → Claude を維持</td></tr>
+      <tr><td class="y">codex_burn</td><td>🔥 [Burn-Codex]</td><td>Codex に使い切れない余剰・Claude は余剰なし</td><td>Codex を積極消費</td></tr>
+      <tr><td class="y">claude_burn</td><td>🔥 [Burn-Claude]</td><td>Claude に余剰・Codex は余剰なし</td><td>Claude を積極消費</td></tr>
+      <tr><td class="y">codex_first</td><td>[Codex-First +N%]</td><td>ギャップ &gt; +10%（Claude の方が余裕）</td><td>調査・レビューは Codex へ</td></tr>
+      <tr><td class="b">claude_first</td><td>[Claude-First +N%]</td><td>ギャップ &lt; −10%（Codex の方が余裕）</td><td>Claude 優先</td></tr>
+      <tr><td class="g">normal</td><td>[Balanced +N%]</td><td>ギャップ ±10% 以内</td><td>バランス（タスク種別で振る）</td></tr>
+    </table>
+    <p><b>動的閾値</b>: Claude 保護閾値（危機/温存）は <b>リセットまでの残り時間でスケール</b>（<code>threshold = base × hours_until_reset / 168</code>、危機 base=5% / 温存 base=15%）。リセット直前なら多少残量が少なくても問題なし、遠いほど厳しく保護。Codex 週次閾値もリセットまで 24h/48h/それ以上で 3% / 5% / 10% と動的。</p>
+    <p><b>Burn 検出</b>: <code>残量% − (リセットまで時間 × 推定消費 20%/day)</code> がリセット後も 25% 以上残る見込みなら「使い切れない余剰」と判断し、その枠を積極消費するモードに倒す。</p>
+    <blockquote><code>+N%</code> はバランスギャップ。Codex データが stale/取得失敗のときはギャップ 0 扱いで誤ルーティングを防ぐ。</blockquote>
+  </section>
+
+  <section id="setup">
+    <h2>セットアップ</h2>
+    <pre><code>git clone https://github.com/BellExpan/ai-usage-monitor.git
+cd ai-usage-monitor
+bash scripts/setup.sh</code></pre>
+    <p><code>setup.sh</code> が自動でやること:</p>
+    <ul>
+      <li>スクリプトへの実行権限付与</li>
+      <li>launchd 登録（5 分ごとにキャッシュ更新）</li>
+      <li>SwiftBar プラグインのシンボリックリンク作成</li>
+      <li>Claude Code の SessionStart フックへの登録</li>
+      <li>旧バージョンキャッシュの削除・移行 / 権限ドリフト修復 / 初回キャッシュ生成</li>
+    </ul>
+    <h3>手動で必要な設定（statusLine）</h3>
+    <p>statusLine だけは <code>~/.claude/settings.json</code> への手動追記が必要（理由は次節）。</p>
+    <pre><code>"statusLine": {
+  "type": "command",
+  "command": "/path/to/ai-usage-monitor/scripts/statusline.sh",
+  "refreshInterval": 2,
+  "padding": 1
+}</code></pre>
+  </section>
+
+  <section id="plugin">
+    <h2>なぜ Claude Code Plugin にしなかったか</h2>
+    <blockquote>このツールは社内（業務委託先）への <b>Claude Code Plugin としての配布</b>を検討したが、公式仕様を調査した結果「<b>フル Plugin 化は不可能・companion plugin に留まる</b>」と結論した。設計判断の記録。</blockquote>
+    <h3>Claude Code Plugin がバンドルできるもの</h3>
+    <p><code>skills/</code> <code>commands/</code> <code>agents/</code> <code>hooks/</code>（hooks.json）<code>.mcp.json</code> <code>.lsp.json</code> <code>monitors/</code>（monitors.json = tail 型の常駐通知）<code>bin/</code>（PATH に載る実行ファイル）<code>settings.json</code>（<b><code>agent</code> と <code>subagentStatusLine</code> キーのみ</b>）。</p>
+    <h3>致命的な制約</h3>
+    <table>
+      <tr><th>構成要素</th><th>Plugin 化</th><th>理由</th></tr>
+      <tr><td>statusline.sh（メイン statusLine）</td><td class="ng">✗ 不可</td><td>Plugin の settings.json は<b>メインの <code>statusLine</code> キーを未サポート</b>（<code>agent</code> / <code>subagentStatusLine</code> のみ）。<b>最大の価値である statusLine を plugin で自動設定できない</b></td></tr>
+      <tr><td>launchd（5分ごとのキャッシュ更新）</td><td class="ng">✗ 外部</td><td>Plugin の monitors は「stdout を Claude への通知に流す tail 型」。定期 silent 更新には不向き</td></tr>
+      <tr><td>SwiftBar メニューバー</td><td class="ng">✗ 外部</td><td>Claude Code の管轄外</td></tr>
+      <tr><td>SessionStart フック</td><td class="ok">✓ 可</td><td><code>hooks/hooks.json</code> でバンドル可</td></tr>
+      <tr><td><code>bg-status.sh</code> / 進捗 CLI</td><td class="ok">✓ 可</td><td><code>bin/</code> に置けば PATH に載る</td></tr>
+    </table>
+    <h3>結論：companion plugin が限界</h3>
+    <p>最大価値の statusLine・launchd・SwiftBar が plugin で完結しないため、<b>「plugin を入れれば完成する」体験は作れない</b>。作れるのはせいぜい「<b>Claude Code から入れる導線（companion）</b>」止まり。</p>
+    <ul>
+      <li><code>bin/</code>（進捗 CLI）+ opt-in の SessionStart hook + <code>/setup</code> <code>/doctor</code> skill</li>
+      <li><code>monitors/</code> は「使用量 80%/95% 超過・OAuth 失敗・cache stale」など<b>重要イベントだけ</b>（5 分ごとの使用量を流すと会話ノイズになる）</li>
+      <li>statusLine の設定は plugin install 時の自動ではなく、<b>setup skill がユーザー明示実行で settings.json を構造的に編集</b>（バックアップ・既存検出・idempotent が必須）</li>
+      <li><code>statusLine.command</code> に <b>plugin install ディレクトリを直書きしてはいけない</b>（更新でパスが変わる）。<code>~/.claude/ai-usage-monitor/statusline.sh</code> 等の安定パスを指す</li>
+    </ul>
+    <div class="callout warn"><b>学び</b>: Claude Code Plugin は「skills / agents / hooks / MCP を共有する」のが本質で、<b>statusLine・常駐プロセス・メニューバーのような “環境常駐型ツール” の配布手段ではない</b>。ツールの価値の所在（= statusLine）と、plugin が配布できる範囲が噛み合うかを最初に確認すべきだった。</div>
+  </section>
+
+  <section id="datasource">
+    <h2>データソース</h2>
+    <table>
+      <tr><th>データ</th><th>ソース</th><th>更新頻度</th></tr>
+      <tr><td>Claude 5h / 週次全モデル / 週次Sonnet（%）</td><td>Anthropic OAuth API <code>/api/oauth/usage</code></td><td>5分ごと（launchd）</td></tr>
+      <tr><td>Claude トークン数・コスト（7d / 24h）</td><td>ccusage（ローカル JSONL）</td><td>5分ごと</td></tr>
+      <tr><td>Codex 5h / 週次（%・リセット時刻）</td><td><code>~/.codex/sessions/**/*.jsonl</code> の <code>rate_limits</code></td><td>5分ごと</td></tr>
+      <tr><td>Codex トークン数・コスト</td><td>@ccusage/codex（ローカル JSONL）</td><td>5分ごと</td></tr>
+    </table>
+    <h3>OAuth API アクセス方法</h3>
+    <p>Claude Code がキーチェーンに保存したトークンを利用（追加設定不要）。</p>
+    <pre><code>security find-generic-password -s "Claude Code-credentials" -w
+# → {"claudeAiOauth": {"accessToken": "...", ...}}
+
+GET https://api.anthropic.com/api/oauth/usage
+Authorization: Bearer &lt;accessToken&gt;
+anthropic-beta: oauth-2025-04-20</code></pre>
+  </section>
+
+  <section id="security">
+    <h2>セキュリティ</h2>
+    <p>キャッシュディレクトリ（<code>$DARWIN_USER_TEMP_DIR/ai-usage-monitor/</code>）は以下の保護が施されている。</p>
+    <table>
+      <tr><th>対策</th><th>実装</th></tr>
+      <tr><td>Squatting 防止</td><td><code>[ -O "$AI_USAGE_DIR" ]</code> — 自分所有でなければ拒否</td></tr>
+      <tr><td>Symlink 攻撃防止</td><td><code>[ -L "$AI_USAGE_DIR" ]</code> — シンボリックリンクなら拒否</td></tr>
+      <tr><td>キャッシュファイル権限</td><td><code>chmod 600</code> — 他ユーザーから読めない</td></tr>
+      <tr><td>ロックディレクトリ競合</td><td><code>mkdir</code> アトミック操作 + PID ファイルで二重起動防止</td></tr>
+      <tr><td>相対パス traversal</td><td><code>AI_USAGE_BASE_DIR</code> に相対パスを渡すと警告後デフォルトにフォールバック</td></tr>
+      <tr><td>statusLine への注入防止</td><td>bg 進捗・出力スニペットは表示前に ANSI エスケープ・制御文字・バックスラッシュを除去</td></tr>
+    </table>
+  </section>
+
+  <section id="test">
+    <h2>テスト</h2>
+    <pre><code>brew install bats-core   # 未インストールの場合
+bats tests/session-start-lock.bats
+bats tests/statusline-bg-status.bats</code></pre>
+    <ul>
+      <li><code>session-start-lock.bats</code>（13件）: ロック競合・stale PID 判定・キャッシュパス・<code>init_cache_dir</code> セキュリティチェック</li>
+      <li><code>statusline-bg-status.bats</code>（27件）: bg-status の set/clear/render・複数 job 集約・MAX_JOBS 上限・stale/future ガード・ANSI 注入除去・パストラバーサル/dotfile サニタイズ・レガシー単一ファイル互換・CLI</li>
+    </ul>
+    <p>全テストはサンドボックスで動作し、本番キャッシュには触れない。</p>
+  </section>
+
+  <section id="files">
+    <h2>ファイル構成</h2>
+    <pre><code>ai-usage-monitor/
+├── scripts/
+│   ├── lib/
+│   │   ├── cache-path.sh  # キャッシュパス正典
+│   │   └── bg-status.sh   # バックグラウンド進捗の状態関数（set/clear/render）
+│   ├── cache-update.sh    # キャッシュを5分ごと更新（launchd）
+│   ├── statusline.sh      # Claude Code statusline
+│   ├── bg-status.sh       # バックグラウンド進捗 set/clear CLI
+│   └── setup.sh           # ワンコマンドセットアップ
+├── swiftbar/ai_usage.5m.sh        # SwiftBar プラグイン
+├── hooks/session-start.sh         # SessionStart フック
+├── tests/
+│   ├── session-start-lock.bats    # 13件
+│   └── statusline-bg-status.bats  # 27件
+├── docs/                          # README / このドキュメント / デモ GIF
+└── launchd/com.aiorg.usage-monitor.plist</code></pre>
+  </section>
+
+  <section id="cache">
+    <h2>キャッシュファイル仕様</h2>
+    <p><code>$DARWIN_USER_TEMP_DIR/ai-usage-monitor/cache</code>（<code>KEY=VALUE</code> 形式、<code>source</code> して使用）</p>
+    <table>
+      <tr><th>キー</th><th>内容</th></tr>
+      <tr><td><code>CLA_OAUTH_FRESH</code></td><td>OAuth API からの取得成功フラグ（1=成功）</td></tr>
+      <tr><td><code>CLA_5H_*_PCT</code> / <code>CLA_7D_*_PCT</code> / <code>CLA_7D_SONNET_*_PCT</code></td><td>Claude 5h / 週次全モデル / 週次Sonnet の使用%・残%</td></tr>
+      <tr><td><code>CLA_*_RESETS_AT</code></td><td>リセット時刻（Unix epoch）</td></tr>
+      <tr><td><code>CLA_7D_TOKENS</code> / <code>CLA_7D_COST</code> / <code>CLA_24H_*</code></td><td>Claude トークン数・コスト（7日 / 当日）</td></tr>
+      <tr><td><code>CDX_5H_*_PCT</code> / <code>CDX_WEEK_*_PCT</code></td><td>Codex 5h / 週次 使用%・残%</td></tr>
+      <tr><td><code>CDX_*_RESETS_AT</code> / <code>CDX_RATE_LIMITS_FRESH</code></td><td>Codex リセット時刻 / データが24h以内か</td></tr>
+      <tr><td><code>CDX_WEEK_TOKENS</code> / <code>CDX_WEEK_COST</code> / <code>CDX_24H_*</code></td><td>Codex トークン数・コスト</td></tr>
+      <tr><td><code>ROUTING_MODE</code></td><td><code>claude_critical</code> / <code>save_claude</code> / <code>protect_codex</code> / <code>codex_burn</code> / <code>claude_burn</code> / <code>codex_first</code> / <code>claude_first</code> / <code>normal</code></td></tr>
+      <tr><td><code>CDX_UNDERUSE_WARN</code></td><td>Codex未活用警告フラグ（1=未活用 / 0=正常）</td></tr>
+      <tr><td><code>TIMESTAMP</code></td><td>キャッシュ生成時刻（Unix epoch）</td></tr>
+    </table>
+  </section>
+
+  <section id="trouble">
+    <h2>トラブルシューティング</h2>
+    <table>
+      <tr><th>症状</th><th>原因・対処</th></tr>
+      <tr><td>statusLine に何も出ない</td><td><code>settings.json</code> の <code>statusLine</code> が未設定、またはキーが小文字。camelCase <code>statusLine</code> で記述</td></tr>
+      <tr><td><code>⚠cache stale</code> が出続ける（旧版）</td><td>launchd が動いていない。<code>launchctl list | grep usage-monitor</code> で確認、<code>bash scripts/cache-update.sh</code> を手動実行</td></tr>
+      <tr><td>アイドル中に進捗が固まる</td><td><code>refreshInterval</code> 未設定。settings.json に <code>"refreshInterval": 2</code> を追加</td></tr>
+      <tr><td><code>⏳</code> が出ない</td><td><code>bg-status.sh</code> を実行した cwd と statusLine の cwd（= ワークスペース）が別プロジェクト。同じリポジトリ内で実行する</td></tr>
+      <tr><td>数値が <code>100%</code> 固定</td><td>OAuth トークン取得失敗（キーチェーン未認証）。Claude Code に再ログイン</td></tr>
+    </table>
+  </section>
+
+  <section id="macos">
+    <h2>なぜ macOS 専用か</h2>
+    <p><code>date -v</code> / <code>date -r</code>（BSD date 構文）、<code>$DARWIN_USER_TEMP_DIR</code>、<code>stat -f</code>、launchd、SwiftBar、キーチェーン（<code>security</code>）に依存しているため。Linux/Windows 対応は現状の設計では未対応（無理に対応すると逆に壊れるため、潔く macOS 専用と明記している）。</p>
+  </section>
+
+  <hr>
+  <p class="dim" style="font-size:.85rem">ai-usage-monitor — <a href="https://github.com/BellExpan/ai-usage-monitor">github.com/BellExpan/ai-usage-monitor</a></p>
+</main>
+</div>
+
+<script>
+  // scrollspy: 表示中セクションをサイドバーでハイライト
+  const links=[...document.querySelectorAll('#toc a')];
+  const map={}; links.forEach(a=>map[a.getAttribute('href').slice(1)]=a);
+  const obs=new IntersectionObserver(es=>{
+    es.forEach(e=>{ if(e.isIntersecting){
+      links.forEach(l=>l.classList.remove('active'));
+      const a=map[e.target.id]; if(a)a.classList.add('active');
+    }});
+  },{rootMargin:'-10% 0px -80% 0px'});
+  document.querySelectorAll('main section[id]').forEach(s=>obs.observe(s));
+</script>
+</body>
+</html>
