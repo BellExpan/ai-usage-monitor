@@ -43,7 +43,7 @@
   .lead{color:var(--muted)}
   .badge{display:inline-block;background:var(--kbd);border:1px solid var(--border);color:var(--muted);
     font-size:.8rem;padding:3px 10px;border-radius:999px;font-family:var(--mono);margin-bottom:14px}
-  img.demo{max-width:100%;border:1px solid var(--border);border-radius:10px;margin:1em 0;display:block}
+  .demo{max-width:100%;border:1px solid var(--border);border-radius:10px;margin:1em 0;display:block}
   pre{background:var(--code-bg);color:var(--code-fg);border-radius:10px;padding:16px 18px;overflow:auto;
     font-family:var(--mono);font-size:.86rem;line-height:1.6;margin:1em 0}
   code{font-family:var(--mono);font-size:.86em;background:var(--kbd);padding:.15em .4em;border-radius:5px}
@@ -102,8 +102,11 @@
     <h1>ai-usage-monitor</h1>
     <p class="tagline">Claude Code と Codex（OpenAI）のサブスク使用量をリアルタイムに可視化し、残量に応じて「どちらに仕事を振るか」を自動提案する macOS 常駐ツール。</p>
     <p class="lead">Claude Code の <b>statusLine</b>（ターミナル最下部）と <b>SwiftBar</b>（メニューバー）に、5h・週次の残量％、トークン数・コスト、実行中のバックグラウンドジョブの進捗を常時表示する。</p>
-    <img class="demo" src="demo.gif" alt="ai-usage-monitor デモ — statusLine に使用量とバックグラウンド進捗が表示される様子">
-    <pre><code>ai-org  ᛘ main  Sonnet 4.6 (200k ctx)  <span class="y">ctx:32%</span>
+    <video class="demo" src="demo.mp4" autoplay loop muted playsinline controls
+           aria-label="ai-usage-monitor デモ — statusLine に使用量とバックグラウンド進捗が表示される様子">
+      お使いのブラウザは動画再生に対応していません。<a href="demo.mp4">demo.mp4</a> を直接開いてください。
+    </video>
+    <pre><code>ai-org  ᛘ main  Opus 4.8 (1M context)  <span class="y">ctx:32%</span>
 <span class="g">🟢 Claude</span>:5h89%/1w90%/Snt1w86%  <span class="g">🟢 Codex</span>:5h99%/1w99% [Balanced +2%]  <span class="dim">↻12:05</span>
 <span class="y">⚡3 bg</span>  <span class="b">⏳ CI 3/5 passing</span>
 <span class="b">🔧 ri-pr42 「RI レビュー」</span> ████░░░░ 50% elapsed=12s last=3s <span class="g">🟢 active</span>
@@ -159,7 +162,7 @@
   <section id="display">
     <h2>表示の詳細</h2>
     <h3>1. Claude Code statusLine（複数行）</h3>
-    <pre><code>ai-org  ᛘ main  Sonnet 4.6 (200k ctx)  ctx:32%
+    <pre><code>ai-org  ᛘ main  Opus 4.8 (1M context)  ctx:32%
 🟢 Claude:5h89%/1w90%/Snt1w86%  🟢 Codex:5h99%/1w99% [Balanced +2%]  ↻12:05
 ⚡3 bg  ⏳ CI 3/5 passing
 🔧 ri-pr42 「RI レビュー」 ████░░░░ 50% elapsed=12s last=3s 🟢 active
@@ -167,7 +170,7 @@
     <table>
       <tr><th>表示</th><th>意味</th></tr>
       <tr><td><code>ai-org ᛘ main</code></td><td>リポジトリ名・現在のブランチ</td></tr>
-      <tr><td><code>Sonnet 4.6 (200k ctx)</code></td><td>使用中のモデルとコンテキストウィンドウサイズ</td></tr>
+      <tr><td><code>Opus 4.8 (1M context)</code></td><td>使用中のモデルとコンテキストウィンドウサイズ</td></tr>
       <tr><td><code>ctx:32%</code></td><td>コンテキスト使用率（50%+ 黄 / 80%+ 赤 / 100%+ dim）</td></tr>
       <tr><td><code>🟢 Claude:5h89%/1w90%/Snt1w86%</code></td><td>Claude 5h残 / 週次全モデル残 / 週次 Sonnet残（🟢≥30% 🟡&lt;30% 🔴&lt;10%）</td></tr>
       <tr><td><code>🟢 Codex:5h99%/1w99%</code></td><td>Codex 5h残 / 週次残（🟢≥50% 🟡&lt;50% 🔴&lt;20%）</td></tr>
@@ -392,14 +395,20 @@ anthropic-beta: oauth-2025-04-20</code></pre>
 
   <section id="test">
     <h2>テスト</h2>
+    <p>bats（bash 用テストフレームワーク）で <b>13 ファイル・184 テスト</b>を網羅している。</p>
     <pre><code>brew install bats-core   # 未インストールの場合
-bats tests/session-start-lock.bats
-bats tests/statusline-bg-status.bats</code></pre>
-    <ul>
-      <li><code>session-start-lock.bats</code>（13件）: ロック競合・stale PID 判定・キャッシュパス・<code>init_cache_dir</code> セキュリティチェック</li>
-      <li><code>statusline-bg-status.bats</code>（27件）: bg-status の set/clear/render・複数 job 集約・MAX_JOBS 上限・stale/future ガード・ANSI 注入除去・パストラバーサル/dotfile サニタイズ・レガシー単一ファイル互換・CLI</li>
-    </ul>
-    <p>全テストはサンドボックスで動作し、本番キャッシュには触れない。</p>
+bats tests/        # 全テスト実行
+bats tests/hooks/  # フックのテストのみ</code></pre>
+    <table>
+      <tr><th>テストファイル</th><th>件数</th><th>対象</th></tr>
+      <tr><td><code>session-start-lock.bats</code></td><td>13</td><td>ロック競合・stale PID 判定・キャッシュパス・<code>init_cache_dir</code> セキュリティ</td></tr>
+      <tr><td><code>statusline-bg-status.bats</code></td><td>27</td><td>bg-status の set/clear/render・複数 job 集約・MAX_JOBS・ANSI 注入除去・パストラバーサル</td></tr>
+      <tr><td><code>codex-rate-limits-parser.bats</code></td><td>8</td><td>Codex <code>rate_limits</code> パーサ（片側 null skip・残量と <code>resets_at</code> 抽出）</td></tr>
+      <tr><td><code>ai_org_progress_*.bats</code>（8 ファイル）</td><td>93</td><td>進捗 pin の write/complete/lifecycle・<b>liveness 死活判定</b>・再帰集約・stale 孤児 reap・入力検証</td></tr>
+      <tr><td><code>find_active_root_pin.bats</code></td><td>15</td><td>アクティブな root pin の探索</td></tr>
+      <tr><td><code>hooks/test_enforce_subagent_progress.bats</code></td><td>28</td><td>subagent dispatch の進捗 pin 強制フック</td></tr>
+    </table>
+    <p>全テストは <code>AI_USAGE_BASE_DIR</code> / 隔離 PROGRESS_DIR のサンドボックスで動作し、本番キャッシュには触れない。</p>
   </section>
 
   <section id="files">
@@ -408,18 +417,25 @@ bats tests/statusline-bg-status.bats</code></pre>
 ├── scripts/
 │   ├── lib/
 │   │   ├── cache-path.sh  # キャッシュパス正典
-│   │   └── bg-status.sh   # バックグラウンド進捗の状態関数（set/clear/render）
-│   ├── cache-update.sh    # キャッシュを5分ごと更新（launchd）
-│   ├── statusline.sh      # Claude Code statusline
-│   ├── bg-status.sh       # バックグラウンド進捗 set/clear CLI
-│   └── setup.sh           # ワンコマンドセットアップ
-├── swiftbar/ai_usage.5m.sh        # SwiftBar プラグイン
-├── hooks/session-start.sh         # SessionStart フック
-├── tests/
-│   ├── session-start-lock.bats    # 13件
-│   └── statusline-bg-status.bats  # 27件
-├── docs/                          # README / このドキュメント / デモ GIF
-└── launchd/com.aiorg.usage-monitor.plist</code></pre>
+│   │   ├── bg-status.sh   # バックグラウンド進捗の状態関数（set/clear/render）
+│   │   └── parse_codex_rate_limits.py  # Codex rate_limits パーサ
+│   ├── cache-update.sh           # キャッシュを5分ごと更新（launchd）
+│   ├── statusline.sh             # Claude Code statusline
+│   ├── bg-status.sh              # 任意ジョブの進捗 set/clear CLI
+│   ├── ai-org-progress.sh        # subagent / bg ジョブの進捗 pin CLI（🔧/⚙ 表示）
+│   ├── ai-org-subagent-watch.sh  # 動作中 subagent を進捗 pin に反映（launchd・10秒周期）
+│   ├── runner-status.sh          # GitHub Actions runner の状態を1行出力
+│   └── setup.sh                  # ワンコマンドセットアップ
+├── swiftbar/ai_usage.5m.sh           # SwiftBar プラグイン
+├── hooks/
+│   ├── session-start.sh              # SessionStart フック
+│   ├── auto-pin-subagent.sh          # subagent dispatch 直後の進捗 pin 代行 write
+│   └── enforce-subagent-progress.sh  # 進捗 pin 無しの dispatch を弾く強制フック
+├── tests/                            # bats 13 ファイル・184 テスト
+├── docs/                             # このドキュメント / デモ（demo.gif・demo.mp4）
+└── launchd/
+    ├── com.aiorg.usage-monitor.plist     # 使用量更新ジョブ（5分毎）
+    └── com.ai-org.subagent-watch.plist   # subagent watch ジョブ（10秒毎）</code></pre>
   </section>
 
   <section id="cache">
