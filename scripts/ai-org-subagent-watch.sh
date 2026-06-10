@@ -195,9 +195,17 @@ sync_bg_processes() {
 
 sync_once() {
   if [ ! -d "$SUBAGENT_DIR" ]; then echo "subagent dir not found"; return; fi
-  # Issue #645: launchd 10s 周期で死んだ / 孤児化した pin を自動 reap し
-  # "⚠️ stuck?" の残骸が溜まり続けるのを防ぐ。
-  ai-org-progress reap >/dev/null 2>&1 || true
+  # Issue #645: 死んだ / 孤児化した pin を自動 reap し "⚠️ stuck?" の残骸堆積を防ぐ。
+  # sync_once は launchd 10s 周期だが、reap は全 pin に jq を複数 fork するため
+  # 60s に1回へ間引く (MEDIUM-2: CPU/fork 負荷軽減)。マーカーの mtime で判定。
+  local _reap_marker=/tmp/ai-org-progress/.last_reap
+  local _now _last
+  _now=$(date +%s)
+  _last=$(stat -f %m "$_reap_marker" 2>/dev/null || echo 0)
+  if [ $(( _now - _last )) -ge 60 ]; then
+    ai-org-progress reap >/dev/null 2>&1 || true
+    : > "$_reap_marker" 2>/dev/null || true
+  fi
   active_root=$(find_active_root_pin)
   # 子プロセス (codex / xcodebuild) auto-pin
   sync_bg_processes "$active_root"

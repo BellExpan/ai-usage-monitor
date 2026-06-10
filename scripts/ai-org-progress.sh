@@ -161,23 +161,50 @@ pin_liveness() {
   local pid agent_file
   pid=$(jq -r '.pid // empty' "$f" 2>/dev/null)
   agent_file=$(jq -r '.agent_file // empty' "$f" 2>/dev/null)
+
+  # --- pid anchor ---
+  # 「生存確定 (alive)」だけを pid で即断する。dead は確定せずフォールスルーして
+  #   agent_file も確認する (HIGH-2: 死んだ pid が fresh な agent_file を隠さない)。
+  local pid_dead=0
   if [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]]; then
-    if kill -0 "$pid" 2>/dev/null; then echo alive; else echo dead; fi
-    return
-  fi
-  if [[ -n "$agent_file" ]]; then
-    if [[ -f "$agent_file" ]]; then
-      local mt age
-      mt=$(stat -f %m "$agent_file" 2>/dev/null || stat -c %Y "$agent_file" 2>/dev/null)
-      if [[ -z "$mt" || ! "$mt" =~ ^[0-9]+$ ]]; then echo unknown; return; fi
-      age=$(( $(now_ts) - mt ))
-      if [[ $age -lt $LIVENESS_FRESH_SEC ]]; then echo alive; else echo dead; fi
-    else
-      echo dead
+    if kill -0 "$pid" 2>/dev/null; then
+      echo alive; return
     fi
+    # HIGH-1: kill -0 は ESRCH(不在) と EPERM(存在するが権限なし) を区別しない。
+    # EPERM は「生きている別ユーザープロセス」なので alive 扱いにする。
+    # 注: `kill ... | grep` は set -o pipefail 下で kill の非ゼロ終了を拾い grep の
+    #   マッチ結果が無視されるため、stderr を変数に取ってから grep する。
+    local _kill_err
+    _kill_err=$(kill -0 "$pid" 2>&1)
+    if printf '%s' "$_kill_err" | grep -qi 'not permitted'; then
+      echo alive; return
+    fi
+    pid_dead=1
+  fi
+
+  # --- agent_file anchor (subagent jsonl) ---
+  if [[ -n "$agent_file" ]]; then
+    if [[ ! -f "$agent_file" ]]; then
+      echo dead; return        # jsonl 消滅 = session 終了 → 死亡確定
+    fi
+    local mt age
+    mt=$(stat -f %m "$agent_file" 2>/dev/null || stat -c %Y "$agent_file" 2>/dev/null)
+    if [[ -n "$mt" && "$mt" =~ ^[0-9]+$ ]]; then
+      age=$(( $(now_ts) - mt ))
+      if [[ $age -lt $LIVENESS_FRESH_SEC ]]; then
+        echo alive; return     # 直近に jsonl 更新 = 稼働中
+      fi
+    fi
+    # MEDIUM-1: jsonl が stale でも「長い単一ツール実行中(build/codex等)で jsonl が
+    #   凍結しているだけ」か「終了済み」かは区別できない。即 dead にすると稼働中
+    #   subagent を false reap する (本ツールの目的と衝突)。
+    #   → pid も dead なら dead 確定、そうでなければ unknown にして孤児タイマー(30分)に委譲。
+    if [[ $pid_dead -eq 1 ]]; then echo dead; else echo unknown; fi
     return
   fi
-  echo unknown
+
+  # --- anchor なし ---
+  if [[ $pid_dead -eq 1 ]]; then echo dead; else echo unknown; fi
 }
 
 # Issue #645: 表示用ステータスマーカー。completed / liveness / 更新鮮度を総合判定。

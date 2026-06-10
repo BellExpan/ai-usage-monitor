@@ -48,8 +48,12 @@ AI_ORG_PROGRESS_BIN="/Users/bellspan/.local/bin/ai-org-progress"
 # これにより pin は「jsonl mtime が古い = subagent 死亡」を死活判定でき、
 # complete/clear 呼び忘れの孤児が ~LIVENESS_FRESH_SEC で自動 reap される。
 AGENT_FILE=""
-if [ -n "$AGENT_ID" ]; then
-  AGENT_FILE=$(ls -t "$HOME"/.claude/projects/*/*/subagents/agent-"$AGENT_ID".jsonl 2>/dev/null | head -1)
+# MEDIUM-3: AGENT_ID は jq 由来だが防御的に形式検証 (英数 + . _ -)。
+# パス解決は `ls` 出力パース (スペース/改行で壊れる) ではなく glob 直接展開を使う。
+if [ -n "$AGENT_ID" ] && printf '%s' "$AGENT_ID" | grep -qE '^[A-Za-z0-9._-]+$'; then
+  for _cand in "$HOME"/.claude/projects/*/*/subagents/agent-"$AGENT_ID".jsonl; do
+    [ -f "$_cand" ] && AGENT_FILE="$_cand" && break
+  done
 fi
 
 # 既に pin が存在 (= subagent 自身が write 済 or 他経路) → anchor だけ後付けする

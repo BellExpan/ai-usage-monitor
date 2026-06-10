@@ -95,7 +95,9 @@ def ensure(event, cmd):
     for group in arr:
         for h in group.get("hooks", []):
             existing = h.get("command") or ""
-            if cmd in existing:
+            # LOW-2: 部分一致だと auto_pin_subagent_v2 等で誤マッチするため
+            # コマンド末尾 (スクリプトパス) の完全一致で判定する。
+            if existing == cmd or existing == f"bash {cmd}" or existing.endswith(f" {cmd}"):
                 return False
     arr.append({"matcher": "Agent", "hooks": [{"type": "command", "command": f"bash {cmd}"}]})
     return True

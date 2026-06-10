@@ -96,11 +96,51 @@ write_json() {
   [ -f "$TEST_PROGRESS_DIR/alive-pid.json" ]
 }
 
+@test "reap: EPERM (別ユーザー所有 pid=1) は alive 扱いで温存 (HIGH-1)" {
+  # pid 1 = launchd (root 所有)。非root では kill -0 が EPERM。dead 誤判定しない
+  write_json eperm-pid 9999 false '"pid":1'
+  run "$WRAPPER" reap
+  [ "$status" -eq 0 ]
+  [ -f "$TEST_PROGRESS_DIR/eperm-pid.json" ]
+}
+
+@test "reap: 死んだ pid でも agent_file が fresh なら温存 (HIGH-2 フォールスルー)" {
+  local af="$TEST_PROGRESS_DIR/agent-h2.jsonl"
+  echo '{}' > "$af"   # fresh
+  write_json h2 9999 false "\"pid\":2147480000,\"agent_file\":\"${af}\""
+  run "$WRAPPER" reap
+  [ "$status" -eq 0 ]
+  [ -f "$TEST_PROGRESS_DIR/h2.json" ]
+}
+
 @test "reap: agent_file が消えている pin を削除する" {
   write_json dead-agent 30 false '"agent_file":"/nonexistent/agent-zzz.jsonl"'
   run "$WRAPPER" reap
   [ "$status" -eq 0 ]
   [ ! -f "$TEST_PROGRESS_DIR/dead-agent.json" ]
+}
+
+@test "reap: agent_file が stale でも pin が新しければ温存 (MEDIUM-1: 長時間単一ツール実行の false dead 防止)" {
+  # 長い build 中の subagent を模す: jsonl は古い(凍結)が pin update は最近
+  local af="$TEST_PROGRESS_DIR/agent-busy.jsonl"
+  echo '{}' > "$af"
+  local old; old=$(( $(date +%s) - 600 ))   # jsonl mtime 600s 前
+  touch -t "$(date -r "$old" +%Y%m%d%H%M.%S)" "$af" 2>/dev/null || true
+  write_json busy 300 false "\"agent_file\":\"${af}\""   # pin updated 300s 前 (< ORPHAN 1800)
+  run "$WRAPPER" reap
+  [ "$status" -eq 0 ]
+  [ -f "$TEST_PROGRESS_DIR/busy.json" ]   # unknown 扱い → 孤児タイマー未満なので温存
+}
+
+@test "reap: agent_file stale かつ pin も ORPHAN 超なら reap (孤児確定)" {
+  local af="$TEST_PROGRESS_DIR/agent-old.jsonl"
+  echo '{}' > "$af"
+  local old; old=$(( $(date +%s) - 3000 ))
+  touch -t "$(date -r "$old" +%Y%m%d%H%M.%S)" "$af" 2>/dev/null || true
+  write_json longgone 2400 false "\"agent_file\":\"${af}\""  # pin 2400s > ORPHAN 1800
+  run "$WRAPPER" reap
+  [ "$status" -eq 0 ]
+  [ ! -f "$TEST_PROGRESS_DIR/longgone.json" ]
 }
 
 @test "reap: agent_file の mtime が新しい pin は残す" {
