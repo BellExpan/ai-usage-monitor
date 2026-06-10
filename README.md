@@ -451,7 +451,8 @@ ai-usage-monitor/
 ├── scripts/
 │   ├── lib/
 │   │   ├── cache-path.sh  # キャッシュパス正典（AI_USAGE_DIR / CACHE_FILE / LOCK_DIR / init_cache_dir）
-│   │   └── bg-status.sh   # バックグラウンド進捗の状態関数（set/clear/render）
+│   │   ├── bg-status.sh   # バックグラウンド進捗の状態関数（set/clear/render）
+│   │   └── parse_codex_rate_limits.py  # Codex rate_limits パーサ（null マーカー skip・5h/週枠の残量と resets_at 抽出）
 │   ├── cache-update.sh    # キャッシュを5分ごと更新（launchd から呼ばれる）
 │   ├── statusline.sh      # Claude Code statusline（stdin JSON + キャッシュ）
 │   ├── bg-status.sh       # バックグラウンド進捗 set/clear CLI（⏳ 表示）
@@ -462,7 +463,8 @@ ai-usage-monitor/
 │   └── session-start.sh   # Claude Code SessionStart フック
 ├── tests/
 │   ├── session-start-lock.bats     # ロック・キャッシュパスの bats テスト（13件）
-│   └── statusline-bg-status.bats   # バックグラウンド進捗の bats テスト（27件）
+│   ├── statusline-bg-status.bats   # バックグラウンド進捗の bats テスト（27件）
+│   └── codex-rate-limits-parser.bats  # Codex rate_limits パーサの bats テスト（8件）
 └── launchd/
     └── com.aiorg.usage-monitor.plist  # launchd ジョブ定義
 ```

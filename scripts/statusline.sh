@@ -184,12 +184,12 @@ else
   CLA_DISPLAY="${CLA_IC} ${cyan}Claude${reset}:5h${CLA_5H_REMAINING_PCT}%${CLA_RESET_LABEL}"
 fi
 
-# Codex % — 絵文字後スペース + ラベルを黄色で色付け
+# Codex リセット残り時間ラベル（週枠・常に時間単位、Claude と対称）
+# 旧仕様の「週残≤80%」ゲートは撤廃（Claude は無条件表示なのに Codex だけ
+# 非表示になる非対称を解消・Issue #7）
 CDX_RESET_LABEL=""
-_cdx_week_int=${CDX_WEEK_REMAINING_PCT%.*}
-if [ "${_cdx_week_int:-100}" -le 80 ] && [ "${CDX_HOURS_UNTIL_RESET:-0}" -gt 0 ] 2>/dev/null; then
+[ "${CDX_HOURS_UNTIL_RESET:-0}" -gt 0 ] 2>/dev/null && \
   CDX_RESET_LABEL=" ${dim}↺${CDX_HOURS_UNTIL_RESET}h${reset}"
-fi
 CDX_DISPLAY="${CDX_IC} ${yellow}Codex${reset}:5h${CDX_5H_REMAINING_PCT%.*}%/1w${CDX_WEEK_REMAINING_PCT%.*}%${CDX_RESET_LABEL}"
 
 [ -n "$parts" ] && printf "%b\n" "$parts"

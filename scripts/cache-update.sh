@@ -121,51 +121,14 @@ rows=[x for x in d.get('daily',[]) if x.get('date','')=='$TODAY']
 print(rows[0].get('totalCost',0) if rows else 0)")
 
 # ── Codex 残量% — セッションJSONLの rate_limits から取得 ──
+# パーサは scripts/lib/parse_codex_rate_limits.py に分離（テスト可能化・Issue #7）。
+# primary/secondary=null（premium 切替・週枯渇マーカー）を skip して
+# 直近の有効な rate_limits を採用する。
 # python3クラッシュ時のread失敗（set -euo pipefail 即死）を防ぐためデフォルト初期化
 CDX_5H_USED_PCT=0 CDX_5H_REMAINING_PCT=100 CDX_5H_RESETS_AT=0
 CDX_WEEK_USED_PCT=0 CDX_WEEK_REMAINING_PCT=100 CDX_WEEK_RESETS_AT=0
 CDX_RATE_LIMITS_FRESH=0
-_cdx_out=$(python3 - "$HOME/.codex/sessions" <<'PYEOF'
-import json, os, glob, sys, time
-
-sessions_dir = sys.argv[1]
-files = sorted(glob.glob(os.path.join(sessions_dir, "**", "*.jsonl"), recursive=True))
-
-rate_limits = None
-ts = 0
-for f in reversed(files):
-    try:
-        with open(f) as fp:
-            for line in fp:
-                d = json.loads(line)
-                if d.get("type") == "event_msg":
-                    p = d.get("payload", {})
-                    if p.get("type") == "token_count" and "rate_limits" in p:
-                        rate_limits = p["rate_limits"]
-                        ts = d.get("timestamp", "")
-        if rate_limits:
-            break
-    except Exception:
-        pass
-
-if rate_limits:
-    pri = rate_limits.get("primary", {})
-    sec = rate_limits.get("secondary", {})
-    p5u  = float(pri.get("used_percent", 0))
-    wku  = float(sec.get("used_percent", 0))
-    p5r  = round(100 - p5u, 1)
-    wkr  = round(100 - wku, 1)
-    p5at = int(pri.get("resets_at", 0))
-    wkat = int(sec.get("resets_at", 0))
-    # 24h以内のデータか
-    fresh = 1 if ts and (time.time() - time.mktime(
-        __import__("datetime").datetime.fromisoformat(
-            ts.replace("Z","+00:00")).timetuple())) < 86400 else 0
-    print(p5u, p5r, p5at, wku, wkr, wkat, fresh)
-else:
-    print(0, 100, 0, 0, 100, 0, 0)
-PYEOF
-) || true
+_cdx_out=$(python3 "$(dirname "$0")/lib/parse_codex_rate_limits.py" "$HOME/.codex/sessions" 2>/dev/null) || true
 [ -n "$_cdx_out" ] && read CDX_5H_USED_PCT CDX_5H_REMAINING_PCT CDX_5H_RESETS_AT \
      CDX_WEEK_USED_PCT CDX_WEEK_REMAINING_PCT CDX_WEEK_RESETS_AT \
      CDX_RATE_LIMITS_FRESH <<< "$_cdx_out"
