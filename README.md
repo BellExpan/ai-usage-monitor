@@ -6,9 +6,9 @@
 
 Claude Code の **statusLine**（ターミナル最下部のステータス行）と **SwiftBar**（メニューバー）に、5h・週次の残量％、トークン数・コスト、そして実行中のバックグラウンドジョブの進捗を常時表示する。
 
-https://github.com/BellExpan/ai-usage-monitor/raw/main/docs/demo.mp4
+![ai-usage-monitor デモ](docs/demo.gif)
 
-*statusLine に Claude / Codex の残量・実行中ジョブの進捗・ルーティング提案が表示される様子（GitHub 上では再生プレイヤーが埋め込まれます。再生されない場合は [`docs/demo.mp4`](docs/demo.mp4) を直接開いてください）。*
+*statusLine に Claude / Codex の残量・実行中ジョブの進捗・ルーティング提案が表示される様子。高画質版（動画）は [`docs/demo.mp4`](docs/demo.mp4) ／ [Web 版ドキュメント](https://bellexpan.github.io/ai-usage-monitor/) で視聴できます。*
 
 > **整形済みの全文ドキュメント（Web 版）: <https://bellexpan.github.io/ai-usage-monitor/>**
 > （API Doc 風・左サイドバー TOC 付き。ローカルでは `docs/index.html` をブラウザで開いても同じものが見られます）
@@ -485,7 +485,8 @@ ai-usage-monitor/
 │   └── com.ai-org.subagent-watch.plist   # subagent watch ジョブ（10秒毎）
 └── docs/
     ├── index.html  # 整形済みドキュメント（GitHub Pages 版）
-    └── demo.mp4    # デモ動画
+    ├── demo.gif    # README 用デモ（GitHub インライン表示・高画質）
+    └── demo.mp4    # 高画質デモ動画（Pages の <video> / 直接視聴用）
 ```
 
 ---
