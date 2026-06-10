@@ -6,13 +6,15 @@
 
 Claude Code の **statusLine**（ターミナル最下部のステータス行）と **SwiftBar**（メニューバー）に、5h・週次の残量％、トークン数・コスト、そして実行中のバックグラウンドジョブの進捗を常時表示する。
 
-![ai-usage-monitor デモ](docs/demo.gif)
+https://github.com/BellExpan/ai-usage-monitor/raw/main/docs/demo.mp4
+
+*statusLine に Claude / Codex の残量・実行中ジョブの進捗・ルーティング提案が表示される様子（GitHub 上では再生プレイヤーが埋め込まれます。再生されない場合は [`docs/demo.mp4`](docs/demo.mp4) を直接開いてください）。*
 
 > **整形済みの全文ドキュメント（Web 版）: <https://bellexpan.github.io/ai-usage-monitor/>**
 > （API Doc 風・左サイドバー TOC 付き。ローカルでは `docs/index.html` をブラウザで開いても同じものが見られます）
 
 ```
-ai-org  ᛘ main  Sonnet 4.6 (200k ctx)  ctx:32%
+ai-org  ᛘ main  Opus 4.8 (1M context)  ctx:32%
 🟢 Claude:5h89%/1w90%/Snt1w86%  🟢 Codex:5h99%/1w99% [Balanced +2%]  ↻12:05
 ⚡3 bg  ⏳ CI 3/5 passing
 🔧 ri-pr42 「RI レビュー」 ████░░░░ 50% elapsed=12s last=3s 🟢 active
@@ -78,7 +80,7 @@ Claude Code（Max プラン）と Codex（Plus プラン）を併用している
 ### 1. Claude Code statusLine（複数行）
 
 ```
-ai-org  ᛘ main  Sonnet 4.6 (200k ctx)  ctx:32%
+ai-org  ᛘ main  Opus 4.8 (1M context)  ctx:32%
 🟢 Claude:5h89%/1w90%/Snt1w86%  🟢 Codex:5h99%/1w99% [Balanced +2%]  ↻12:05
 ⚡3 bg  ⏳ CI 3/5 passing
 🔧 ri-pr42 「RI レビュー」 ████░░░░ 50% elapsed=12s last=3s 🟢 active
@@ -88,7 +90,7 @@ ai-org  ᛘ main  Sonnet 4.6 (200k ctx)  ctx:32%
 | 表示 | 意味 |
 |---|---|
 | `ai-org ᛘ main` | リポジトリ名・現在のブランチ |
-| `Sonnet 4.6 (200k ctx)` | 使用中のモデルとコンテキストウィンドウサイズ |
+| `Opus 4.8 (1M context)` | 使用中のモデルとコンテキストウィンドウサイズ |
 | `ctx:32%` | コンテキスト使用率（50%+ 黄 / 80%+ 赤 / 100%+ dim） |
 | `🟢 Claude:5h89%/1w90%/Snt1w86%` | Claude 5h残 / 週次全モデル残 / 週次 Sonnet残（🟢≥30% 🟡<30% 🔴<10%） |
 | `🟢 Codex:5h99%/1w99%` | Codex 5h残 / 週次残（🟢≥50% 🟡<50% 🔴<20%） |
@@ -430,15 +432,23 @@ bash scripts/cache-update.sh
 
 ## テスト
 
+bats（bash 用テストフレームワーク）で **13 ファイル・184 テスト**を網羅している。
+
 ```bash
 brew install bats-core   # 未インストールの場合
 
-bats tests/session-start-lock.bats
-bats tests/statusline-bg-status.bats
+bats tests/        # 全テスト実行
+bats tests/hooks/  # フックのテストのみ
 ```
 
-- `session-start-lock.bats`（13件）: ロック競合・stale PID 判定・キャッシュパス・`init_cache_dir` セキュリティチェック
-- `statusline-bg-status.bats`（27件）: bg-status の set/clear/render・複数 job 集約・MAX_JOBS 上限・stale/future ガード・ANSI 注入除去・パストラバーサル/dotfile サニタイズ・レガシー単一ファイル互換・CLI
+| テストファイル | 件数 | 対象 |
+|---|---|---|
+| `session-start-lock.bats` | 13 | ロック競合・stale PID 判定・キャッシュパス・`init_cache_dir` セキュリティ |
+| `statusline-bg-status.bats` | 27 | bg-status の set/clear/render・複数 job 集約・MAX_JOBS 上限・ANSI 注入除去・パストラバーサル/dotfile サニタイズ |
+| `codex-rate-limits-parser.bats` | 8 | Codex `rate_limits` パーサ（片側 null skip・残量と `resets_at` 抽出） |
+| `ai_org_progress_*.bats`（8 ファイル） | 93 | 進捗 pin の write/complete/lifecycle・**liveness 死活判定**・再帰集約・stale 孤児 reap・入力検証 |
+| `find_active_root_pin.bats` | 15 | アクティブな root pin の探索 |
+| `hooks/test_enforce_subagent_progress.bats` | 28 | subagent dispatch の進捗 pin 強制フック |
 
 全テストは `AI_USAGE_BASE_DIR` / 隔離 PROGRESS_DIR のサンドボックスで動作し、本番キャッシュには触れない。
 
@@ -452,21 +462,30 @@ ai-usage-monitor/
 │   ├── lib/
 │   │   ├── cache-path.sh  # キャッシュパス正典（AI_USAGE_DIR / CACHE_FILE / LOCK_DIR / init_cache_dir）
 │   │   ├── bg-status.sh   # バックグラウンド進捗の状態関数（set/clear/render）
-│   │   └── parse_codex_rate_limits.py  # Codex rate_limits パーサ（null マーカー skip・5h/週枠の残量と resets_at 抽出）
-│   ├── cache-update.sh    # キャッシュを5分ごと更新（launchd から呼ばれる）
-│   ├── statusline.sh      # Claude Code statusline（stdin JSON + キャッシュ）
-│   ├── bg-status.sh       # バックグラウンド進捗 set/clear CLI（⏳ 表示）
-│   └── setup.sh           # ワンコマンドセットアップ
+│   │   └── parse_codex_rate_limits.py  # Codex rate_limits パーサ（null マーカー skip・残量と resets_at 抽出）
+│   ├── cache-update.sh           # キャッシュを5分ごと更新（launchd から呼ばれる）
+│   ├── statusline.sh             # Claude Code statusline（stdin JSON + キャッシュ）
+│   ├── bg-status.sh              # 任意ジョブの進捗 set/clear CLI（⏳ 表示）
+│   ├── ai-org-progress.sh        # subagent / bg ジョブの進捗 pin CLI（write/complete/reap・🔧/⚙ 表示）
+│   ├── ai-org-subagent-watch.sh  # 動作中 subagent を進捗 pin に反映（launchd・10秒周期）
+│   ├── runner-status.sh          # GitHub Actions self-hosted runner の状態を1行出力
+│   └── setup.sh                  # ワンコマンドセットアップ
 ├── swiftbar/
 │   └── ai_usage.5m.sh     # SwiftBar プラグイン（5分ごと自動リフレッシュ）
 ├── hooks/
-│   └── session-start.sh   # Claude Code SessionStart フック
-├── tests/
-│   ├── session-start-lock.bats     # ロック・キャッシュパスの bats テスト（13件）
-│   ├── statusline-bg-status.bats   # バックグラウンド進捗の bats テスト（27件）
-│   └── codex-rate-limits-parser.bats  # Codex rate_limits パーサの bats テスト（8件）
-└── launchd/
-    └── com.aiorg.usage-monitor.plist  # launchd ジョブ定義
+│   ├── session-start.sh              # Claude Code SessionStart フック（使用量サマリ表示）
+│   ├── auto-pin-subagent.sh          # subagent dispatch 直後に進捗 pin を代行 write（liveness anchor 付与）
+│   └── enforce-subagent-progress.sh  # dispatch prompt に進捗 pin が無ければ弾く強制フック
+├── tests/                    # bats テスト 13 ファイル・184 テスト
+│   ├── session-start-lock.bats / statusline-bg-status.bats / codex-rate-limits-parser.bats
+│   ├── ai_org_progress_*.bats（8 ファイル）/ find_active_root_pin.bats
+│   └── hooks/test_enforce_subagent_progress.bats
+├── launchd/
+│   ├── com.aiorg.usage-monitor.plist     # 使用量キャッシュ更新ジョブ（5分毎）
+│   └── com.ai-org.subagent-watch.plist   # subagent watch ジョブ（10秒毎）
+└── docs/
+    ├── index.html  # 整形済みドキュメント（GitHub Pages 版）
+    └── demo.mp4    # デモ動画
 ```
 
 ---
