@@ -200,7 +200,7 @@ ai-org-progress write ri-pr48 2 3 "レビュー投稿"
 ai-org-progress write ri-pr48 3 3 "判定"
 ```
 
-表示される数字はこの JSON（`{current,total,label,started,updated,parent}`）と時刻から算出する。
+表示される数字はこの JSON（`{current,total,label,started,updated,parent,completed,pid?,agent_file?}`）と時刻から算出する。
 
 | 表示 | 計算 |
 |---|---|
@@ -208,8 +208,32 @@ ai-org-progress write ri-pr48 3 3 "判定"
 | `████░░░░` | `current / total × 幅` ブロック |
 | `elapsed=2s` | `now − started` |
 | `last=2s` | `now − updated`（最後の write からの経過） |
-| `🟢 active` / `⚠️ stuck?` | `now − updated` が 90 秒以内なら active / 超で stuck |
+| `✅ done` | `completed=true` または `current ≥ total`（完了は stuck 表示しない） |
+| `🟢 running` | anchor（`pid`/`agent_file`）が**生存**（更新が古くても stuck にしない＝長時間タスク許容） |
+| `❌ ended` | anchor が**死亡確定**（`pid` 消滅 / `agent_file` mtime が古い）→ reap 対象 |
+| `🟢 active` / `⚠️ stuck?` | anchor なし時のみ `now − updated` の 90 秒で判定 |
 | 親（root）の集約値 | 子孫の `current/total` を合算 |
+
+#### 死活判定（liveness healthcheck — Issue #645）
+
+旧実装は `now − updated`（最後の進捗書き込みからの経過）だけで `stuck?` を出していたため、
+**死んだ pin が 24 時間残る**・**生きている長時間タスクも誤って stuck 判定される**問題があった。
+
+現在は pin に **anchor** を持たせて実際の死活を判定する:
+
+- `pid`: `kill -0` でプロセス生死を確定判定
+- `agent_file`: subagent の jsonl の mtime が `LIVENESS_FRESH_SEC`（既定 120s）以内なら生存
+- anchor は subagent dispatch 時に `auto-pin-subagent.sh` hook が自動付与（`agentId` → jsonl パス解決）
+
+そして **`ai-org-progress reap`** が `subagent-watch`（launchd 10s 周期）から定期実行され:
+
+- anchor が死亡確定 → 即 reap（clear）
+- anchor なしで `ORPHAN_HIDE_SEC`（既定 1800s=30分）超の `completed=false` pin → 孤児とみなし reap
+- 生存中の長時間タスク（anchor 生存）は温存
+
+これにより「死んだものは残さない／生きている長時間タスクはそのまま」を構造的に保証する。
+
+> **このツール群（`ai-org-progress.sh` / `ai-org-subagent-watch.sh` / `enforce-subagent-progress.sh` / `auto-pin-subagent.sh`）は Issue #645 で ai-org から本 repo へ移管された。`scripts/setup.sh` が `~/.local/bin` と `~/.claude/hooks/` へ install する。**
 
 つまり数字の正体は「**エージェントが宣言したステップ番号**（self-reported milestone）」であり、実作業量を測ったものではない。
 

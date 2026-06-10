@@ -58,6 +58,57 @@ else
   echo "  hook path: $REPO_DIR/hooks/session-start.sh"
 fi
 
+# 4b. Issue #645: 進捗監視ツール (ai-org-progress / subagent-watch) + Agent hooks
+#     を ai-org から ai-usage-monitor へ移管。本 repo が正典。
+LOCAL_BIN="$HOME/.local/bin"
+HOOKS_DST="$HOME/.claude/hooks"
+mkdir -p "$LOCAL_BIN" "$HOOKS_DST"
+
+# 進捗 CLI / subagent-watch を ~/.local/bin に install (statusline / launchd が参照する固定パス)
+install -m 0755 "$REPO_DIR/scripts/ai-org-progress.sh"       "$LOCAL_BIN/ai-org-progress"
+install -m 0755 "$REPO_DIR/scripts/ai-org-subagent-watch.sh" "$LOCAL_BIN/ai-org-subagent-watch"
+echo "✓ ai-org-progress / ai-org-subagent-watch を $LOCAL_BIN に install"
+
+# Agent hooks を ~/.claude/hooks/ の正典パスへ同期 (settings.json の登録パスと一致させる)
+install -m 0755 "$REPO_DIR/hooks/enforce-subagent-progress.sh" "$HOOKS_DST/enforce_subagent_progress.sh"
+install -m 0755 "$REPO_DIR/hooks/auto-pin-subagent.sh"         "$HOOKS_DST/auto_pin_subagent.sh"
+echo "✓ enforce_subagent_progress / auto_pin_subagent hook を同期"
+
+# subagent-watch launchd (10s 周期で pin 同期 + Issue #645 死活 reap)
+SW_PLIST_SRC="$REPO_DIR/launchd/com.ai-org.subagent-watch.plist"
+SW_PLIST_DST="$HOME/Library/LaunchAgents/com.ai-org.subagent-watch.plist"
+sed -e "s|HOME_DIR|$HOME|g" "$SW_PLIST_SRC" > "$SW_PLIST_DST"
+launchctl unload "$SW_PLIST_DST" 2>/dev/null || true
+launchctl load "$SW_PLIST_DST"
+echo "✓ subagent-watch launchd 登録 (10s 周期で死活 reap)"
+
+# Agent hooks を settings.json に idempotent 登録 (既存登録があれば no-op)
+if command -v python3 >/dev/null && [ -f "$CLAUDE_SETTINGS" ]; then
+  python3 - "$CLAUDE_SETTINGS" "$HOOKS_DST/enforce_subagent_progress.sh" "$HOOKS_DST/auto_pin_subagent.sh" <<'PYEOF'
+import json, sys
+settings_path, enforce_path, autopin_path = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(settings_path) as f:
+    d = json.load(f)
+hooks = d.setdefault("hooks", {})
+def ensure(event, cmd):
+    arr = hooks.setdefault(event, [])
+    for group in arr:
+        for h in group.get("hooks", []):
+            existing = h.get("command") or ""
+            if cmd in existing:
+                return False
+    arr.append({"matcher": "Agent", "hooks": [{"type": "command", "command": f"bash {cmd}"}]})
+    return True
+changed = ensure("PreToolUse", enforce_path) | ensure("PostToolUse", autopin_path)
+if changed:
+    with open(settings_path, "w") as f:
+        json.dump(d, f, indent=2, ensure_ascii=False)
+    print("✓ Agent hooks を settings.json に登録")
+else:
+    print("✓ Agent hooks は既に登録済み")
+PYEOF
+fi
+
 # 5. 旧パス移行（$DARWIN_USER_TEMP_DIR 配下に移行）
 # shellcheck source=lib/cache-path.sh
 source "$REPO_DIR/scripts/lib/cache-path.sh"
