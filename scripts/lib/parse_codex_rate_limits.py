@@ -38,24 +38,33 @@ def main():
     ts = ""
     for f in reversed(files):
         try:
-            with open(f) as fp:
-                for line in fp:
+            fp = open(f)
+        except OSError:
+            continue
+        with fp:
+            for line in fp:
+                # 壊れ行・書き込み途中のトランケート末尾行は「その行だけ」
+                # スキップする。try をファイル全体に掛けると、有効イベントより
+                # 前に1行でも壊れ行があるとファイル丸ごと捨てて
+                # デフォルト（残100%）にフォールバックし、本修正が直す
+                # 「枯渇を残100%」バグを別経路で再発させる（RI-1）。
+                try:
                     d = json.loads(line)
-                    if d.get("type") != "event_msg":
-                        continue
-                    p = d.get("payload", {})
-                    if p.get("type") == "token_count" and "rate_limits" in p:
-                        rl = p["rate_limits"]
-                        # primary/secondary が両方 null のイベント
-                        # （premium 切替・週枯渇マーカー）は window 情報なし
-                        # → スキップし、直近の有効な rate_limits を採用する
-                        if rl and (rl.get("primary") or rl.get("secondary")):
-                            rate_limits = rl
-                            ts = d.get("timestamp", "")
-            if rate_limits:
-                break
-        except Exception:
-            pass
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(d, dict) or d.get("type") != "event_msg":
+                    continue
+                p = d.get("payload", {})
+                if p.get("type") == "token_count" and "rate_limits" in p:
+                    rl = p["rate_limits"]
+                    # primary/secondary が両方 null のイベント
+                    # （premium 切替・週枯渇マーカー）は window 情報なし
+                    # → スキップし、直近の有効な rate_limits を採用する
+                    if rl and (rl.get("primary") or rl.get("secondary")):
+                        rate_limits = rl
+                        ts = d.get("timestamp", "")
+        if rate_limits:
+            break
 
     if not rate_limits:
         print("0 100 0 0 100 0 0")
@@ -65,20 +74,22 @@ def main():
     sec = rate_limits.get("secondary") or {}
     p5u = float(pri.get("used_percent", 0))
     wku = float(sec.get("used_percent", 0))
-    p5r = round(100 - p5u, 1)
-    wkr = round(100 - wku, 1)
+    # 残量は [0,100] にクランプ（異常値で負/超過残量が下流の閾値比較を
+    # 誤らせるのを防ぐ・RI-3）
+    p5r = round(max(0.0, min(100.0, 100 - p5u)), 1)
+    wkr = round(max(0.0, min(100.0, 100 - wku)), 1)
     p5at = int(pri.get("resets_at", 0))
     wkat = int(sec.get("resets_at", 0))
 
-    # 24h 以内のデータか（既存挙動を踏襲）
+    # 24h 以内のデータか。aware datetime の .timestamp() で正しい epoch を得る
+    # （旧 mktime(timetuple()) は naive 解釈で TZ オフセット分ズレ境界判定が
+    # 反転しうる・RI-2）
     fresh = 0
     if ts:
         try:
-            epoch = time.mktime(
-                datetime.datetime.fromisoformat(
-                    ts.replace("Z", "+00:00")
-                ).timetuple()
-            )
+            epoch = datetime.datetime.fromisoformat(
+                ts.replace("Z", "+00:00")
+            ).timestamp()
             fresh = 1 if (time.time() - epoch) < 86400 else 0
         except Exception:
             fresh = 0
