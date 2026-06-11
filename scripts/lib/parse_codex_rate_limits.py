@@ -4,8 +4,13 @@
 ~/.codex/sessions/**/*.jsonl の最新 token_count イベントから
 5h(primary)/週(secondary) 枠の使用率・残量・リセット epoch を抽出する。
 
-出力(stdout, スペース区切り 7 値):
-  p5_used p5_remaining p5_resets_at wk_used wk_remaining wk_resets_at fresh
+出力(stdout, スペース区切り 9 値):
+  p5_used p5_remaining p5_resets_at wk_used wk_remaining wk_resets_at fresh \
+  p5_window_minutes wk_window_minutes
+
+window_minutes は resets_at が過去になった時の「次リセット」ロールフォワード投影に使う
+（Issue #18: Codex 未使用で fresh データが来ないと resets_at が過去固定 → ↺soon 永久固定を解消）。
+欠落イベントでは 0（= window 不明 → 投影しない安全側）を出す。
 
 設計判断（クラッシュ防止の要）:
   Codex は週枠枯渇時に `limit_id=premium` / `primary=null` / `secondary=null`
@@ -67,7 +72,7 @@ def main():
             break
 
     if not rate_limits:
-        print("0 100 0 0 100 0 0")
+        print("0 100 0 0 100 0 0 0 0")
         return
 
     pri = rate_limits.get("primary") or {}
@@ -80,6 +85,9 @@ def main():
     wkr = round(max(0.0, min(100.0, 100 - wku)), 1)
     p5at = int(pri.get("resets_at", 0))
     wkat = int(sec.get("resets_at", 0))
+    # window_minutes（5h=300 / 週=10080）。欠落時は 0 = 投影しない安全側（#18）。
+    p5win = int(pri.get("window_minutes", 0) or 0)
+    wkwin = int(sec.get("window_minutes", 0) or 0)
 
     # 24h 以内のデータか。aware datetime の .timestamp() で正しい epoch を得る
     # （旧 mktime(timetuple()) は naive 解釈で TZ オフセット分ズレ境界判定が
@@ -94,7 +102,7 @@ def main():
         except Exception:
             fresh = 0
 
-    print(p5u, p5r, p5at, wku, wkr, wkat, fresh)
+    print(p5u, p5r, p5at, wku, wkr, wkat, fresh, p5win, wkwin)
 
 
 if __name__ == "__main__":

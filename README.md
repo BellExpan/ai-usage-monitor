@@ -432,7 +432,7 @@ bash scripts/cache-update.sh
 
 ## テスト
 
-bats（bash 用テストフレームワーク）で **13 ファイル・184 テスト**を網羅している。
+bats（bash 用テストフレームワーク）で **15 ファイル・185 テスト**を網羅している。
 
 ```bash
 brew install bats-core   # 未インストールの場合
@@ -445,7 +445,9 @@ bats tests/hooks/  # フックのテストのみ
 |---|---|---|
 | `session-start-lock.bats` | 13 | ロック競合・stale PID 判定・キャッシュパス・`init_cache_dir` セキュリティ |
 | `statusline-bg-status.bats` | 27 | bg-status の set/clear/render・複数 job 集約・MAX_JOBS 上限・ANSI 注入除去・パストラバーサル/dotfile サニタイズ |
-| `codex-rate-limits-parser.bats` | 8 | Codex `rate_limits` パーサ（片側 null skip・残量と `resets_at` 抽出） |
+| `codex-rate-limits-parser.bats` | 11 | Codex `rate_limits` パーサ（片側 null skip・残量と `resets_at`・`window_minutes` 抽出） |
+| `reset-label.bats` | 23 | リセット残り時間ラベル（epoch 計算・残<1h 表示・`window_minutes` ロールフォワード #18） |
+| `statusline-rollover.bats` | 3 | 過去 resets_at の `↺soon` 固定解消（fresh 残100% + 次リセット投影 #18） |
 | `ai_org_progress_*.bats`（8 ファイル） | 93 | 進捗 pin の write/complete/lifecycle・**liveness 死活判定**・再帰集約・stale 孤児 reap・入力検証 |
 | `find_active_root_pin.bats` | 15 | アクティブな root pin の探索 |
 | `hooks/test_enforce_subagent_progress.bats` | 28 | subagent dispatch の進捗 pin 強制フック |
@@ -476,7 +478,7 @@ ai-usage-monitor/
 │   ├── session-start.sh              # Claude Code SessionStart フック（使用量サマリ表示）
 │   ├── auto-pin-subagent.sh          # subagent dispatch 直後に進捗 pin を代行 write（liveness anchor 付与）
 │   └── enforce-subagent-progress.sh  # dispatch prompt に進捗 pin が無ければ弾く強制フック
-├── tests/                    # bats テスト 13 ファイル・184 テスト
+├── tests/                    # bats テスト 15 ファイル・185 テスト
 │   ├── session-start-lock.bats / statusline-bg-status.bats / codex-rate-limits-parser.bats
 │   ├── ai_org_progress_*.bats（8 ファイル）/ find_active_root_pin.bats
 │   └── hooks/test_enforce_subagent_progress.bats

@@ -72,6 +72,23 @@ CDX_5H_REMAINING_PCT=${CDX_5H_REMAINING_PCT:-100}
 CDX_WEEK_REMAINING_PCT=${CDX_WEEK_REMAINING_PCT:-100}
 ROUTING_MODE=${ROUTING_MODE:-normal}
 
+# ── 描画時 real-time ロールオーバー投影（Issue #18）──
+# cache 更新は最大5分間隔（外部SSD/TCC で遅延しうる）。描画毎に過去化した Codex resets_at を
+# 検出し、使用量を fresh（残100%）に投影＝「↺soon + 残stale」固定を即座に解消する。
+# resets_at の roll は下の reset_label_from_epoch が window 付きで担う（二重に持たない）。
+# window 欠落(旧cache)でも label の fallback(週10080/5h300)と整合させ、過去 resets_at なら投影。
+_SL_NOW=$(date +%s)
+case "${CDX_WEEK_RESETS_AT:-0}" in ''|*[!0-9]*) : ;; *)
+  if [ "$CDX_WEEK_RESETS_AT" -gt 0 ] && [ "$CDX_WEEK_RESETS_AT" -le "$_SL_NOW" ]; then
+    CDX_WEEK_REMAINING_PCT=100
+  fi ;;
+esac
+case "${CDX_5H_RESETS_AT:-0}" in ''|*[!0-9]*) : ;; *)
+  if [ "$CDX_5H_RESETS_AT" -gt 0 ] && [ "$CDX_5H_RESETS_AT" -le "$_SL_NOW" ]; then
+    CDX_5H_REMAINING_PCT=100
+  fi ;;
+esac
+
 # Claude % の優先順位: OAuth API キャッシュ → stdin JSON → フォールバック
 CACHE_CLA_PCT=${CLA_5H_REMAINING_PCT:-}
 CACHE_CLA_OAUTH_FRESH=${CLA_OAUTH_FRESH:-0}
@@ -175,7 +192,9 @@ fi
 # Claude リセット残り時間ラベル（7d枠・epoch からリアルタイム計算・残<1h も表示）
 CLA_RESET_LABEL=""
 _reset_now=$(date +%s)
-_cla_lbl=$(reset_label_from_epoch "${CLA_7D_RESETS_AT:-0}" "$_reset_now")
+# window=10080(7d) を渡し、cache 更新間(最大5分)に過去化した resets_at も real-time で
+# 次リセットへ巻き進める（↺soon 固定の解消・#18）。
+_cla_lbl=$(reset_label_from_epoch "${CLA_7D_RESETS_AT:-0}" "$_reset_now" 10080)
 [ -n "$_cla_lbl" ] && CLA_RESET_LABEL=" ${dim}${_cla_lbl}${reset}"
 
 # Claude %（OAuth 優先）— 絵文字後スペース + ラベルをシアンで色付け
@@ -191,7 +210,8 @@ fi
 # cache の整数 CDX_HOURS_UNTIL_RESET は残<1h を 0 に丸めラベルが消える構造バグが
 # あったため、epoch（CDX_WEEK_RESETS_AT）から都度計算する（Issue #15）。
 CDX_RESET_LABEL=""
-_cdx_lbl=$(reset_label_from_epoch "${CDX_WEEK_RESETS_AT:-0}" "$_reset_now")
+# window_minutes（cache の CDX_WEEK_WINDOW_MIN、fallback 週=10080）を渡し real-time ロール（#18）
+_cdx_lbl=$(reset_label_from_epoch "${CDX_WEEK_RESETS_AT:-0}" "$_reset_now" "${CDX_WEEK_WINDOW_MIN:-10080}")
 [ -n "$_cdx_lbl" ] && CDX_RESET_LABEL=" ${dim}${_cdx_lbl}${reset}"
 CDX_DISPLAY="${CDX_IC} ${yellow}Codex${reset}:5h${CDX_5H_REMAINING_PCT%.*}%/1w${CDX_WEEK_REMAINING_PCT%.*}%${CDX_RESET_LABEL}"
 

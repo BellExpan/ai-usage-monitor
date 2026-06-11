@@ -6,6 +6,8 @@ set -euo pipefail
 
 # shellcheck source=lib/cache-path.sh
 source "$(dirname "$0")/lib/cache-path.sh"
+# shellcheck source=lib/reset-label.sh
+source "$(dirname "$0")/lib/reset-label.sh"  # roll_resets_at_forward（ロールオーバー投影・#18）
 init_cache_dir
 TMP_FILE=$(mktemp -t ai_usage_cache.XXXXXX)
 
@@ -79,6 +81,21 @@ print(pct('five_hour'), epoch('five_hour'),
   CLA_OAUTH_FRESH=1
 fi
 
+# ── Claude ロールオーバー投影（Issue #18・Codex と対称）────────
+# Claude window は固定（7d=10080min / 5h=300min）。OAuth API に window_minutes は無いため定数。
+# resets_at が過去 = リセット済み → 次リセットへ巻き進め、使用量を fresh に投影。
+_NOW_CLA_ROLL=$(date +%s)
+if [ "${CLA_7D_RESETS_AT_EPOCH:-0}" -gt 0 ] && [ "${CLA_7D_RESETS_AT_EPOCH}" -le "$_NOW_CLA_ROLL" ]; then
+  CLA_7D_RESETS_AT_EPOCH=$(roll_resets_at_forward "$CLA_7D_RESETS_AT_EPOCH" "$_NOW_CLA_ROLL" 10080)
+  CLA_7D_USED_PCT=0
+  CLA_7D_REMAINING_PCT=100
+fi
+if [ "${CLA_5H_RESETS_AT_EPOCH:-0}" -gt 0 ] && [ "${CLA_5H_RESETS_AT_EPOCH}" -le "$_NOW_CLA_ROLL" ]; then
+  CLA_5H_RESETS_AT_EPOCH=$(roll_resets_at_forward "$CLA_5H_RESETS_AT_EPOCH" "$_NOW_CLA_ROLL" 300)
+  CLA_5H_USED_PCT=0
+  CLA_5H_REMAINING_PCT=100
+fi
+
 # Claude 7d リセットまでの残り時間（epochベース）
 CLA_7D_HOURS_UNTIL_RESET=0
 _cla_now=$(date +%s)
@@ -127,11 +144,31 @@ print(rows[0].get('totalCost',0) if rows else 0)")
 # python3クラッシュ時のread失敗（set -euo pipefail 即死）を防ぐためデフォルト初期化
 CDX_5H_USED_PCT=0 CDX_5H_REMAINING_PCT=100 CDX_5H_RESETS_AT=0
 CDX_WEEK_USED_PCT=0 CDX_WEEK_REMAINING_PCT=100 CDX_WEEK_RESETS_AT=0
-CDX_RATE_LIMITS_FRESH=0
+CDX_RATE_LIMITS_FRESH=0 CDX_5H_WINDOW_MIN=0 CDX_WEEK_WINDOW_MIN=0
 _cdx_out=$(python3 "$(dirname "$0")/lib/parse_codex_rate_limits.py" "$HOME/.codex/sessions" 2>/dev/null) || true
 [ -n "$_cdx_out" ] && read CDX_5H_USED_PCT CDX_5H_REMAINING_PCT CDX_5H_RESETS_AT \
      CDX_WEEK_USED_PCT CDX_WEEK_REMAINING_PCT CDX_WEEK_RESETS_AT \
-     CDX_RATE_LIMITS_FRESH <<< "$_cdx_out"
+     CDX_RATE_LIMITS_FRESH CDX_5H_WINDOW_MIN CDX_WEEK_WINDOW_MIN <<< "$_cdx_out"
+
+# ── ロールオーバー投影（Issue #18）────────────────────────────
+# resets_at が過去 = ウィンドウは既に周期リセット済み。Codex を使わないと fresh データが
+# 来ず、stale な「枯渇 + ↺soon」が永久固定される。window_minutes が既知なら次リセットへ
+# 巻き進め、使用量を fresh（残100%）に投影して表示・ルーティングを正常化する。
+# window はデータ値があればそれ、欠落(0)なら定義上固定の定数（週=10080 / 5h=300）に
+# フォールバック。これにより data 欠落イベントでも投影が効き soon 固定を確実に解消する。
+_NOW_ROLL=$(date +%s)
+_CDX_WK_WIN=${CDX_WEEK_WINDOW_MIN:-0}; [ "$_CDX_WK_WIN" -gt 0 ] 2>/dev/null || _CDX_WK_WIN=10080
+_CDX_5H_WIN=${CDX_5H_WINDOW_MIN:-0};   [ "$_CDX_5H_WIN" -gt 0 ] 2>/dev/null || _CDX_5H_WIN=300
+if [ "${CDX_WEEK_RESETS_AT:-0}" -gt 0 ] && [ "${CDX_WEEK_RESETS_AT}" -le "$_NOW_ROLL" ]; then
+  CDX_WEEK_RESETS_AT=$(roll_resets_at_forward "$CDX_WEEK_RESETS_AT" "$_NOW_ROLL" "$_CDX_WK_WIN")
+  CDX_WEEK_USED_PCT=0
+  CDX_WEEK_REMAINING_PCT=100
+fi
+if [ "${CDX_5H_RESETS_AT:-0}" -gt 0 ] && [ "${CDX_5H_RESETS_AT}" -le "$_NOW_ROLL" ]; then
+  CDX_5H_RESETS_AT=$(roll_resets_at_forward "$CDX_5H_RESETS_AT" "$_NOW_ROLL" "$_CDX_5H_WIN")
+  CDX_5H_USED_PCT=0
+  CDX_5H_REMAINING_PCT=100
+fi
 
 # ── Codex トークン数（ccusage 補助データ）────────────────
 CDX_JSON=$(npx -y @ccusage/codex@latest daily --json --since "$BILLING_WEEK_START" --until "$TODAY" --offline 2>/dev/null < /dev/null \
@@ -279,6 +316,8 @@ fi
   echo "CDX_WEEK_USED_PCT=$CDX_WEEK_USED_PCT"
   echo "CDX_WEEK_REMAINING_PCT=$CDX_WEEK_REMAINING_PCT"
   echo "CDX_WEEK_RESETS_AT=$CDX_WEEK_RESETS_AT"
+  echo "CDX_5H_WINDOW_MIN=$CDX_5H_WINDOW_MIN"
+  echo "CDX_WEEK_WINDOW_MIN=$CDX_WEEK_WINDOW_MIN"
   echo "CDX_RATE_LIMITS_FRESH=$CDX_RATE_LIMITS_FRESH"
   echo "ROUTING_MODE=$ROUTING_MODE"
   echo "BALANCE_GAP=$BALANCE_GAP"
