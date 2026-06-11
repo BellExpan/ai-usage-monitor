@@ -94,3 +94,53 @@ setup() {
   [ "$status" -eq 0 ]
   [ -z "$output" ]   # resets_at=0 -> hidden
 }
+
+# ---- window_minutes ロールフォワード（Issue #18）----
+# resets_at が過去でも window_minutes 既知なら次リセットへ巻き進め、↺soon 固定を解消する。
+
+@test "roll_resets_at_forward: 既に未来なら変更しない" {
+  run roll_resets_at_forward "$(( NOW + 36000 ))" "$NOW" 10080
+  [ "$output" = "$(( NOW + 36000 ))" ]
+}
+
+@test "roll_resets_at_forward: window 不明(0)なら変更しない" {
+  run roll_resets_at_forward "$(( NOW - 100 ))" "$NOW" 0
+  [ "$output" = "$(( NOW - 100 ))" ]
+}
+
+@test "roll_resets_at_forward: 1周期だけ過去 → +1window" {
+  # 100s 過去・週枠(10080min=604800s) → +1 window
+  run roll_resets_at_forward "$(( NOW - 100 ))" "$NOW" 10080
+  [ "$output" = "$(( NOW - 100 + 604800 ))" ]
+}
+
+@test "roll_resets_at_forward: 複数周期過去 → 未来に着地（O(1)・巨大ギャップ）" {
+  # 3週間+α 過去 → 未来へ。結果は必ず now より大きい
+  local past=$(( NOW - 3*604800 - 50 ))
+  run roll_resets_at_forward "$past" "$NOW" 10080
+  [ "$output" -gt "$NOW" ]
+  # 1周期分だけ未来に収まる（過剰に飛ばさない）
+  [ "$output" -le "$(( NOW + 604800 ))" ]
+}
+
+@test "roll_resets_at_forward: epoch 未知(0)は触らない" {
+  run roll_resets_at_forward 0 "$NOW" 10080
+  [ "$output" = "0" ]
+}
+
+@test "reset_label: 過去 resets_at + window 既知 → soon ではなく ↺Nh" {
+  # 100s 過去・週枠 → +604800s ≈ 167h
+  run reset_label_from_epoch "$(( NOW - 100 ))" "$NOW" 10080
+  [ "$output" = "↺167h" ]
+}
+
+@test "reset_label: window 未指定なら従来通り soon（後方互換）" {
+  run reset_label_from_epoch "$(( NOW - 100 ))" "$NOW"
+  [ "$output" = "↺soon" ]
+}
+
+@test "reset_label: 過去 resets_at が window 直後 → 残<1h を正しく表示" {
+  # 604700s 過去（604800s window の 100s 手前）→ ロール後 残100s → <1h
+  run reset_label_from_epoch "$(( NOW - 604700 ))" "$NOW" 10080
+  [ "$output" = "↺<1h" ]
+}

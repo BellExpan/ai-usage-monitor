@@ -45,16 +45,42 @@ _premium_null_line() {
     > "$SESS/2026/06/10/001-valid.jsonl"
   run python3 "$PARSER" "$SESS"
   [ "$status" -eq 0 ]
-  read -r p5u p5r p5at wku wkr wkat fresh <<< "$output"
+  read -r p5u p5r p5at wku wkr wkat fresh p5win wkwin <<< "$output"
   [ "$p5r" = "88.0" ]
   [ "$wkr" = "60.0" ]
   [ "$wkat" = "1781161744" ]
 }
 
-@test "rate_limits が一切ない: デフォルト '0 100 0 0 100 0 0'" {
+@test "window_minutes を出力する（ロールフォワード投影の前提・Issue #18）" {
+  _valid_line "2026-06-10T08:44:00.000Z" 12.0 1781088377 40.0 1781161744 \
+    > "$SESS/2026/06/10/001-valid.jsonl"
   run python3 "$PARSER" "$SESS"
   [ "$status" -eq 0 ]
-  [ "$output" = "0 100 0 0 100 0 0" ]
+  read -r p5u p5r p5at wku wkr wkat fresh p5win wkwin <<< "$output"
+  [ "$p5win" = "300" ]      # 5h 枠
+  [ "$wkwin" = "10080" ]    # 週枠
+}
+
+@test "rate_limits が一切ない: window_minutes も 0 デフォルト（9値出力）" {
+  run python3 "$PARSER" "$SESS"
+  [ "$status" -eq 0 ]
+  [ "$output" = "0 100 0 0 100 0 0 0 0" ]
+}
+
+@test "window_minutes 欠落イベントでも 0 デフォルトでクラッシュしない" {
+  printf '{"type":"event_msg","timestamp":"2026-06-10T08:44:00.000Z","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":30.0,"resets_at":1781088377},"secondary":{"used_percent":40.0,"resets_at":1781161744}}}}\n' \
+    > "$SESS/2026/06/10/001-no-window.jsonl"
+  run python3 "$PARSER" "$SESS"
+  [ "$status" -eq 0 ]
+  read -r p5u p5r p5at wku wkr wkat fresh p5win wkwin <<< "$output"
+  [ "$p5win" = "0" ]
+  [ "$wkwin" = "0" ]
+}
+
+@test "rate_limits が一切ない: デフォルト '0 100 0 0 100 0 0 0 0'" {
+  run python3 "$PARSER" "$SESS"
+  [ "$status" -eq 0 ]
+  [ "$output" = "0 100 0 0 100 0 0 0 0" ]
 }
 
 @test "同一ファイル内で premium/null が有効イベントの後に来ても有効データを採用" {
@@ -72,7 +98,7 @@ _premium_null_line() {
 @test "存在しない sessions_dir: クラッシュせずデフォルト出力" {
   run python3 "$PARSER" "$SESS/nonexistent"
   [ "$status" -eq 0 ]
-  [ "$output" = "0 100 0 0 100 0 0" ]
+  [ "$output" = "0 100 0 0 100 0 0 0 0" ]
 }
 
 @test "有効イベントの前に壊れ jsonl 行があってもファイルを捨てず採用（RI-1 回帰）" {
