@@ -70,6 +70,13 @@ fi
 
 CDX_5H_REMAINING_PCT=${CDX_5H_REMAINING_PCT:-100}
 CDX_WEEK_REMAINING_PCT=${CDX_WEEK_REMAINING_PCT:-100}
+# Codex リセット epoch も default（cache 不在時に下の -gt/-le 比較が integer expected で死ぬのを防ぐ）
+CDX_WEEK_RESETS_AT=${CDX_WEEK_RESETS_AT:-0}
+CDX_5H_RESETS_AT=${CDX_5H_RESETS_AT:-0}
+# Claude 週次も Codex と対称に default。Claude の 1w は stdin に来ず必ず cache 依存だが
+# macOS の temp dir は定期クリアされ「cache 不在」は常態。default が無いと 1w だけ静かに
+# 消える（owner 報告: Claude の 1w が表示されない）。下で CLA_WEEK へマップされる。
+CLA_7D_REMAINING_PCT=${CLA_7D_REMAINING_PCT:-100}
 ROUTING_MODE=${ROUTING_MODE:-normal}
 
 # ── 描画時 real-time ロールオーバー投影（Issue #18）──
