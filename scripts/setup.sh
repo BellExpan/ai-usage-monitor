@@ -21,11 +21,19 @@ chmod +x "$REPO_DIR/hooks/session-start.sh"
 echo "✓ 実行権限付与"
 
 # 2. launchd plist インストール + 健全性 verify（Issue #24: bootout/bootstrap + fail-loud）
-#    plist は program=/bin/bash（内蔵ディスク）で外部 repo の cache-update.sh を引数に読む。
-#    外部ボリューム上のスクリプトを program として直接 exec すると EX_CONFIG(78) penalty box
-#    になり 5分毎更新が停止する事故（#24）を構造的に防ぐ。
-aum_render_plist "$PLIST_SRC" "$REPO_DIR" "$HOME" "$PLIST_DST"
-aum_deploy "$PLIST_DST"
+#    plist の program は TCC 付与済みの $AUM_PROGRAM（/opt/homebrew/bin/bash）で、外部 repo の
+#    cache-update.sh を引数に読む。外部ボリューム上のスクリプトを program として直接 exec すると
+#    EX_CONFIG(78) penalty box になり 5分毎更新が停止する事故（#24）を構造的に防ぐ。
+# program が実行可能か先に確認（Intel Mac / Homebrew 未導入だと $AUM_PROGRAM 不在で silent 破壊）。
+[ -x "$AUM_PROGRAM" ] || {
+  echo "✗ launchd program が実行不可: $AUM_PROGRAM（Homebrew bash 未導入 / Intel Mac?）" >&2
+  echo "  外部ボリューム(/Volumes)上のスクリプトを読むには TCC 付与済みの bash が必要（#24）" >&2
+  exit 1
+}
+aum_render_plist "$PLIST_SRC" "$REPO_DIR" "$HOME" "$PLIST_DST" || {
+  echo "✗ plist render に失敗（$PLIST_SRC → $PLIST_DST）" >&2; exit 1; }
+aum_deploy "$PLIST_DST" || {
+  echo "✗ launchd deploy(bootstrap) に失敗（$PLIST_DST）" >&2; exit 1; }
 # kickstart は非同期のため、初回 run が完走するまで待ってから last exit code を verify する
 # （待たずに print すると前回の exit code を見てしまい fail-loud が空振りする・#24 で実証）。
 sleep 6
@@ -42,13 +50,15 @@ echo "✓ launchd 登録済み (5分ごと自動更新・health=$_health)"
 # 2b. 旧監視の孤児 launchd を撤去（Issue #24）
 #     com.ai-org.usage-cache は旧版 ai-org 監視の残骸で、現行 status line が読まない
 #     legacy ファイル /tmp/.codex_usage_cache に書き込むだけ。診断ノイズ源のため掃除する。
+_ORPHAN_PLIST="$HOME/Library/LaunchAgents/com.ai-org.usage-cache.plist"
 if launchctl print "gui/$(id -u)/com.ai-org.usage-cache" >/dev/null 2>&1; then
   launchctl bootout "gui/$(id -u)/com.ai-org.usage-cache" 2>/dev/null || true
   echo "✓ 孤児 launchd com.ai-org.usage-cache を撤去"
 fi
-[ -f "$HOME/Library/LaunchAgents/com.ai-org.usage-cache.plist" ] && \
-  mv -f "$HOME/Library/LaunchAgents/com.ai-org.usage-cache.plist" \
-        "$HOME/Library/LaunchAgents/com.ai-org.usage-cache.plist.disabled" 2>/dev/null || true
+if [ -f "$_ORPHAN_PLIST" ]; then
+  mv -f "$_ORPHAN_PLIST" "$_ORPHAN_PLIST.disabled" 2>/dev/null \
+    && echo "✓ 孤児 plist を退避: $_ORPHAN_PLIST.disabled（戻すには .disabled を外して再 bootstrap）"
+fi
 
 # 3. SwiftBar プラグイン
 if [ -d "$SWIFTBAR_PLUGIN_DIR" ]; then

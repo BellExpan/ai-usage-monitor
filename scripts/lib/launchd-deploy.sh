@@ -33,8 +33,9 @@ aum_expected_script() { echo "$1/scripts/cache-update.sh"; }
 # sed 区切りは | を使うため path に | / & が入ると壊れる → 事前に拒否。
 aum_render_plist() {
   local tmpl="$1" repo="$2" home="$3" dst="$4"
-  case "$repo$home" in *'|'*|*'&'*)
-    echo "aum_render_plist: repo/home path に | or & を含むため中断: $repo" >&2; return 1;;
+  case "$repo$home" in *'|'*|*'&'*|*'\'*|*'
+'*)
+    echo "aum_render_plist: repo/home path に | & \\ 改行 を含むため中断: $repo" >&2; return 1;;
   esac
   [ -r "$tmpl" ] || { echo "aum_render_plist: テンプレ不在: $tmpl" >&2; return 1; }
   sed -e "s|REPO_DIR|$repo|g" -e "s|HOME_DIR|$home|g" "$tmpl" > "$dst" || return 1

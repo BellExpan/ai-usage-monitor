@@ -29,8 +29,10 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   exit 0                                        # 別の更新が実行中 → skip（べき等）
 fi
 echo $$ > "$LOCK_DIR/pid"
-# 正常/異常/シグナル終了いずれでも lock と TMP_FILE を解放（SIGKILL のみ次回 stale cleanup）
-trap 'rm -rf "$LOCK_DIR"; [ -n "${TMP_FILE:-}" ] && rm -f "$TMP_FILE"' EXIT
+# 正常/異常/シグナル終了いずれでも lock と TMP_FILE を解放（SIGKILL のみ次回 stale cleanup）。
+# ownership-safe: 自プロセスが TTL 超過で別プロセスに steal され lock が再取得された後に、
+# 自分の EXIT trap が「他者の」lock を消して二重起動防止を壊さないよう、pid が自分の時だけ削除。
+trap '[ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK_DIR"; [ -n "${TMP_FILE:-}" ] && rm -f "$TMP_FILE"' EXIT
 
 TMP_FILE=$(mktemp -t ai_usage_cache.XXXXXX)
 

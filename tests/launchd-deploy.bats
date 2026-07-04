@@ -46,6 +46,13 @@ teardown() { rm -rf "$TMPD"; }
   [ "$status" -ne 0 ]
 }
 
+@test "aum_render_plist rejects path containing backslash or ampersand" {
+  run aum_render_plist "$REPO_ROOT/launchd/com.aiorg.usage-monitor.plist" '/bad\path' "$FAKE_HOME" "$TMPD/out.plist"
+  [ "$status" -ne 0 ]
+  run aum_render_plist "$REPO_ROOT/launchd/com.aiorg.usage-monitor.plist" '/bad&path' "$FAKE_HOME" "$TMPD/out.plist"
+  [ "$status" -ne 0 ]
+}
+
 @test "aum_render_plist fails when template missing" {
   run aum_render_plist "$TMPD/nonexistent.plist" "$FAKE_REPO" "$FAKE_HOME" "$TMPD/out.plist"
   [ "$status" -ne 0 ]
