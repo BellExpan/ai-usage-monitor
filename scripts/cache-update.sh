@@ -9,6 +9,29 @@ source "$(dirname "$0")/lib/cache-path.sh"
 # shellcheck source=lib/reset-label.sh
 source "$(dirname "$0")/lib/reset-label.sh"  # roll_resets_at_forward（ロールオーバー投影・#18）
 init_cache_dir
+
+# ── 単一実行ロック（Issue #24）──────────────────────────────
+# lock 所有権を cache-update.sh 側に集約する。これにより launchd の定期実行と
+# SessionStart hook の即時更新が競合せず（二重更新防止）、正常/異常終了どちらでも
+# trap で必ず解放される（session-start hook 側の lock leak も同時解消）。
+# stale lock（死んだ PID or 10分 TTL 超）は掃除してから取得する。
+_now_lock=$(date +%s)
+if [ -d "$LOCK_DIR" ]; then
+  _lk_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null)
+  _lk_mtime=$(stat -f %m "$LOCK_DIR" 2>/dev/null || echo 0)
+  if [[ "$_lk_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$_lk_pid" 2>/dev/null; then
+    rm -rf "$LOCK_DIR"                          # 死んだ PID
+  elif [ "$(( _now_lock - _lk_mtime ))" -gt 600 ]; then
+    rm -rf "$LOCK_DIR"                          # TTL 超過（実行最大時間超え）
+  fi
+fi
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  exit 0                                        # 別の更新が実行中 → skip（べき等）
+fi
+echo $$ > "$LOCK_DIR/pid"
+# 正常/異常/シグナル終了いずれでも lock と TMP_FILE を解放（SIGKILL のみ次回 stale cleanup）
+trap 'rm -rf "$LOCK_DIR"; [ -n "${TMP_FILE:-}" ] && rm -f "$TMP_FILE"' EXIT
+
 TMP_FILE=$(mktemp -t ai_usage_cache.XXXXXX)
 
 export PATH="$HOME/.nvm/versions/node/$(ls "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -1)/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"

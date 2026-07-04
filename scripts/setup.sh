@@ -9,6 +9,9 @@ PLIST_DST="$HOME/Library/LaunchAgents/$PLIST_NAME.plist"
 SWIFTBAR_PLUGIN_DIR="${SWIFTBAR_PLUGIN_DIR:-$HOME/Library/Application Support/SwiftBar/Plugins}"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 
+# shellcheck source=lib/launchd-deploy.sh
+source "$REPO_DIR/scripts/lib/launchd-deploy.sh"  # aum_render_plist / aum_deploy / aum_verify_health（#24）
+
 echo "=== AI Usage Monitor セットアップ ==="
 
 # 1. キャッシュ更新スクリプトに実行権限
@@ -17,14 +20,35 @@ chmod +x "$REPO_DIR/swiftbar/ai_usage.5m.sh"
 chmod +x "$REPO_DIR/hooks/session-start.sh"
 echo "✓ 実行権限付与"
 
-# 2. launchd plist インストール
-sed \
-  -e "s|REPO_DIR|$REPO_DIR|g" \
-  -e "s|HOME_DIR|$HOME|g" \
-  "$PLIST_SRC" > "$PLIST_DST"
-launchctl unload "$PLIST_DST" 2>/dev/null || true
-launchctl load "$PLIST_DST"
-echo "✓ launchd 登録済み (5分ごと自動更新)"
+# 2. launchd plist インストール + 健全性 verify（Issue #24: bootout/bootstrap + fail-loud）
+#    plist は program=/bin/bash（内蔵ディスク）で外部 repo の cache-update.sh を引数に読む。
+#    外部ボリューム上のスクリプトを program として直接 exec すると EX_CONFIG(78) penalty box
+#    になり 5分毎更新が停止する事故（#24）を構造的に防ぐ。
+aum_render_plist "$PLIST_SRC" "$REPO_DIR" "$HOME" "$PLIST_DST"
+aum_deploy "$PLIST_DST"
+# kickstart は非同期のため、初回 run が完走するまで待ってから last exit code を verify する
+# （待たずに print すると前回の exit code を見てしまい fail-loud が空振りする・#24 で実証）。
+sleep 6
+# install 後に健全性を機械検証。penalty box / last exit≠0 なら fail-loud（landed 保証）。
+# 特に program が TCC 未付与の /bin/bash 等だと exit 126 になる → ここで確実に検出する。
+_health=$(aum_verify_health) || {
+  echo "✗ launchd 登録の健全性検証に失敗: $_health（penalty box / 非0 exit）" >&2
+  echo "  外部ボリューム上のスクリプトを読める TCC 付与済み bash か、plist を確認してください" >&2
+  echo "  launchctl print $(aum_service) / tail /tmp/ai-usage-monitor.err で調査" >&2
+  exit 1
+}
+echo "✓ launchd 登録済み (5分ごと自動更新・health=$_health)"
+
+# 2b. 旧監視の孤児 launchd を撤去（Issue #24）
+#     com.ai-org.usage-cache は旧版 ai-org 監視の残骸で、現行 status line が読まない
+#     legacy ファイル /tmp/.codex_usage_cache に書き込むだけ。診断ノイズ源のため掃除する。
+if launchctl print "gui/$(id -u)/com.ai-org.usage-cache" >/dev/null 2>&1; then
+  launchctl bootout "gui/$(id -u)/com.ai-org.usage-cache" 2>/dev/null || true
+  echo "✓ 孤児 launchd com.ai-org.usage-cache を撤去"
+fi
+[ -f "$HOME/Library/LaunchAgents/com.ai-org.usage-cache.plist" ] && \
+  mv -f "$HOME/Library/LaunchAgents/com.ai-org.usage-cache.plist" \
+        "$HOME/Library/LaunchAgents/com.ai-org.usage-cache.plist.disabled" 2>/dev/null || true
 
 # 3. SwiftBar プラグイン
 if [ -d "$SWIFTBAR_PLUGIN_DIR" ]; then

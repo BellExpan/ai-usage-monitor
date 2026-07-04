@@ -3,36 +3,26 @@
 
 # shellcheck source=../scripts/lib/cache-path.sh
 source "$(dirname "$0")/../scripts/lib/cache-path.sh"
+# shellcheck source=../scripts/lib/launchd-deploy.sh
+source "$(dirname "$0")/../scripts/lib/launchd-deploy.sh"  # aum_self_heal_if_needed（Issue #24）
 init_cache_dir
-CACHE_UPDATE_SH="$(dirname "$0")/../scripts/cache-update.sh"
+_REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+CACHE_UPDATE_SH="$_REPO_DIR/scripts/cache-update.sh"
 
-# キャッシュ鮮度チェック＋自己修復（launchd 2サイクル超 = 600秒以上古ければバックグラウンド更新）
+# キャッシュ鮮度チェック＋自己修復（launchd 2サイクル超 = 600秒以上古ければ更新）
 _now=$(date +%s)
 _cache_ts=$(grep "^TIMESTAMP=" "$CACHE_FILE" 2>/dev/null | cut -d= -f2)
 # 非数値・空は 0 に正規化（破損キャッシュでも算術エラーを防ぐ）
 [[ "$_cache_ts" =~ ^[0-9]+$ ]] || _cache_ts=0
 _cache_age=$(( _now - _cache_ts ))
-if [ "$_cache_age" -gt 600 ] && [ -x "$CACHE_UPDATE_SH" ]; then
-  # stale lock cleanup（dead PID 判定 + 10分 TTL — PID reuse・空PID永続化の両対策）
-  if [ -d "$LOCK_DIR" ]; then
-    _lock_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null)
-    _lock_mtime=$(stat -f %m "$LOCK_DIR" 2>/dev/null || echo 0)
-    _lock_age=$(( _now - _lock_mtime ))
-    if [[ "$_lock_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$_lock_pid" 2>/dev/null; then
-      rm -rf "$LOCK_DIR"  # dead PID
-    elif [ "$_lock_age" -gt 600 ]; then
-      rm -rf "$LOCK_DIR"  # TTL 超過（cache-update.sh の最大実行時間を超えた）
-    fi
-  fi
-  # atomic mkdir lock（mkdir はアトミック操作のため TOCTOU なし）
-  if mkdir "$LOCK_DIR" 2>/dev/null; then
-    echo "[AI使用量司令塔] ⚠️ キャッシュが ${_cache_age}秒 古いためバックグラウンド更新を開始"
-    # 親 PID を先に書き込み（mkdir〜fork 間の SIGKILL で空 pid 残留を防ぐ）
-    echo $$ > "$LOCK_DIR/pid"
-    bash "$CACHE_UPDATE_SH" >/dev/null 2>&1 &
-    # 子 PID で上書き（stale 判定を子プロセスの生存に紐付ける）
-    echo $! > "$LOCK_DIR/pid"
-  fi
+if [ "$_cache_age" -gt 600 ]; then
+  echo "[AI使用量司令塔] ⚠️ キャッシュが ${_cache_age}秒 古いためバックグラウンド更新を開始"
+  # (1) launchd plist が drift/penalty box なら自己修復（Issue #24・stale 時限定・cooldown・fail-soft）
+  #     「テンプレは正しいのに live に未反映」というドリフトを自動で landed 状態に戻す。
+  aum_self_heal_if_needed "$_REPO_DIR"
+  # (2) 即時バックグラウンド更新。cache-update.sh 自身が単一実行ロックを取るため
+  #     launchd の定期実行と競合しない（session-start 側での lock 管理は不要になった）。
+  [ -x "$CACHE_UPDATE_SH" ] && bash "$CACHE_UPDATE_SH" >/dev/null 2>&1 &
 fi
 
 [ -f "$CACHE_FILE" ] || exit 0
