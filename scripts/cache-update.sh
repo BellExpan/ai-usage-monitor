@@ -25,12 +25,14 @@ init_cache_dir
 # の両立を実現する（単純 TTL backstop では①の race が時間経過で必ず再発する・#24 Codex 指摘）。
 _now_lock=$(date +%s)
 if [ -d "$LOCK_DIR" ]; then
-  _lk_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null)
-  _lk_start=$(cat "$LOCK_DIR/start" 2>/dev/null)
+  # set -e 下では失敗する command substitution が exit を誘発するため || true を必ず付ける
+  # （start/pid ファイル不在や ps 失敗で cache-update 自体が落ちるのを防ぐ）。
+  _lk_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+  _lk_start=$(cat "$LOCK_DIR/start" 2>/dev/null || true)
   _lk_mtime=$(stat -f %m "$LOCK_DIR" 2>/dev/null || echo 0)
   _lk_age=$(( _now_lock - _lk_mtime ))
   if [[ "$_lk_pid" =~ ^[0-9]+$ ]]; then
-    _cur_start=$(ps -o lstart= -p "$_lk_pid" 2>/dev/null)
+    _cur_start=$(ps -o lstart= -p "$_lk_pid" 2>/dev/null || true)
     if ! kill -0 "$_lk_pid" 2>/dev/null; then
       rm -rf "$LOCK_DIR"                        # 死んだ PID → 即 stale
     elif [ -n "$_lk_start" ] && [ "$_cur_start" != "$_lk_start" ]; then
