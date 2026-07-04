@@ -37,3 +37,33 @@ teardown() {
   run cat "$LOCK_DIR/pid"
   [ "$output" = "$$" ]           # ロック保持者は変わっていない
 }
+
+# プロセス同一性判定（起動時刻）: 同一 live プロセスは stale 扱いしない（time-independent）。
+# cache-update.sh の stale 判定ロジックをインラインで再現して検証する。
+_is_stale() {
+  local pid start cur
+  pid=$(cat "$LOCK_DIR/pid" 2>/dev/null)
+  start=$(cat "$LOCK_DIR/start" 2>/dev/null)
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then
+    cur=$(ps -o lstart= -p "$pid" 2>/dev/null)
+    if ! kill -0 "$pid" 2>/dev/null; then return 0; fi
+    if [ -n "$start" ] && [ "$cur" != "$start" ]; then return 0; fi
+  fi
+  return 1
+}
+
+@test "same live process (matching start) is NOT stale regardless of time" {
+  mkdir "$LOCK_DIR"
+  echo $$ > "$LOCK_DIR/pid"
+  ps -o lstart= -p $$ > "$LOCK_DIR/start"
+  run _is_stale
+  [ "$status" -ne 0 ]            # not stale
+}
+
+@test "reused pid (mismatching start) IS stale" {
+  mkdir "$LOCK_DIR"
+  echo $$ > "$LOCK_DIR/pid"
+  echo "Mon Jan  1 00:00:00 2001" > "$LOCK_DIR/start"   # 実際の起動時刻と不一致
+  run _is_stale
+  [ "$status" -eq 0 ]            # stale（別プロセスが pid を再利用したと判定）
+}

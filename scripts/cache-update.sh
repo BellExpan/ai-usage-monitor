@@ -18,20 +18,27 @@ init_cache_dir
 # 位置づけは「二重更新を避けるベストエフォート dedup」。cache 書き込み自体は mktemp+mv で
 # atomic なので、万一ロックをすり抜けて更新が並走しても破損しない（最後の mv が勝つ）。
 #
-# stale 掃除の原則: 生きている数値 pid の owner は原則 steal しない。これにより「live owner を
-# TTL で奪う → owner の trap が他者の lock を誤削除する」race を源から断つ。死んだ pid は即掃除、
-# 生きていても 1800s 超は pid 再利用による永続ロックの backstop として掃除する。
+# stale 掃除の原則: 生きている「同一プロセス」の owner は時間に関係なく絶対 steal しない。
+# 同一性は pid だけでなくプロセス起動時刻(ps -o lstart)で判定する。これにより
+#   ① live owner を TTL で奪う → owner の trap が他者 lock を誤削除する race を源から断つ
+#   ② pid 再利用（owner が SIGKILL 死→同 pid を別プロセスが再利用）は起動時刻不一致で検出し steal
+# の両立を実現する（単純 TTL backstop では①の race が時間経過で必ず再発する・#24 Codex 指摘）。
 _now_lock=$(date +%s)
 if [ -d "$LOCK_DIR" ]; then
   _lk_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null)
+  _lk_start=$(cat "$LOCK_DIR/start" 2>/dev/null)
   _lk_mtime=$(stat -f %m "$LOCK_DIR" 2>/dev/null || echo 0)
   _lk_age=$(( _now_lock - _lk_mtime ))
   if [[ "$_lk_pid" =~ ^[0-9]+$ ]]; then
+    _cur_start=$(ps -o lstart= -p "$_lk_pid" 2>/dev/null)
     if ! kill -0 "$_lk_pid" 2>/dev/null; then
       rm -rf "$LOCK_DIR"                        # 死んだ PID → 即 stale
-    elif [ "$_lk_age" -gt 1800 ]; then
-      rm -rf "$LOCK_DIR"                        # 生きているが 1800s 超 → pid 再利用 backstop
+    elif [ -n "$_lk_start" ] && [ "$_cur_start" != "$_lk_start" ]; then
+      rm -rf "$LOCK_DIR"                        # 起動時刻不一致 = pid 再利用の別プロセス → stale
+    elif [ -z "$_lk_start" ] && [ "$_lk_age" -gt 1800 ]; then
+      rm -rf "$LOCK_DIR"                        # 起動時刻未記録(旧lock)のみ TTL backstop（移行期の一度きり）
     fi
+    # start 一致 = 同一 live プロセス → 時間無関係に絶対 steal しない（race を源から排除）
   elif [ "$_lk_age" -gt 600 ]; then
     rm -rf "$LOCK_DIR"                          # pid 空/非数値（mkdir〜pid書込 間クラッシュ）の TTL 掃除
   fi
@@ -40,8 +47,9 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   exit 0                                        # 別の更新が実行中 → skip（べき等）
 fi
 echo $$ > "$LOCK_DIR/pid"
-# ownership-safe 解放: pid が自分の時のみ削除（steal 済みなら他者 lock を消さない）。
-# live owner は上記で steal されないため、この解放が他者 lock を消す race は実質発生しない。
+ps -o lstart= -p $$ 2>/dev/null > "$LOCK_DIR/start" || true  # プロセス同一性トークン
+# ownership-safe 解放: pid が自分の時のみ削除。同一 live owner は上記で絶対 steal されないため、
+# 「owner 生存中に他者が lock を steal→再取得」が起きず、この解放が他者 lock を消す race は生じない。
 trap '[ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK_DIR"; [ -n "${TMP_FILE:-}" ] && rm -f "$TMP_FILE"' EXIT
 
 TMP_FILE=$(mktemp -t ai_usage_cache.XXXXXX)
