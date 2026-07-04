@@ -18,11 +18,16 @@ init_cache_dir
 # 位置づけは「二重更新を避けるベストエフォート dedup」。cache 書き込み自体は mktemp+mv で
 # atomic なので、万一ロックをすり抜けて更新が並走しても破損しない（最後の mv が勝つ）。
 #
-# stale 掃除の原則: 生きている「同一プロセス」の owner は時間に関係なく絶対 steal しない。
-# 同一性は pid だけでなくプロセス起動時刻(ps -o lstart)で判定する。これにより
-#   ① live owner を TTL で奪う → owner の trap が他者 lock を誤削除する race を源から断つ
-#   ② pid 再利用（owner が SIGKILL 死→同 pid を別プロセスが再利用）は起動時刻不一致で検出し steal
-# の両立を実現する（単純 TTL backstop では①の race が時間経過で必ず再発する・#24 Codex 指摘）。
+# このロックは「二重更新を避けるベストエフォート dedup」であり厳密な相互排他ではない。
+# macOS には flock が無く、mkdir を原子プリミティブに使う shell ロックでは「stale 掃除(rm)→
+# 再取得(mkdir)」の間に内在する微小 TOCTOU を完全には除去できない（既知の限界）。
+# しかし cache 書込は mktemp+mv で atomic なので、万一ロックをすり抜けて更新が並走しても
+# 破損・データ損失・永久ロックは発生しない（正しさは cache 書込の atomicity が保証。ロックは
+# 冗長な API fetch を減らす最適化）。この前提の下で、誤 steal は次の多層防御で実務上排除する:
+#   ① 死んだ pid → stale（確実）
+#   ② 生きている pid は「起動時刻(ps -o lstart)」一致で同一プロセスと判定し絶対 steal しない
+#      （pid 再利用は起動時刻不一致でのみ stale。ps 失敗で cur が空なら保守側=steal しない）
+#   ③ 起動時刻未記録の旧 lock のみ 1800s TTL backstop（移行期の一度きり）
 _now_lock=$(date +%s)
 if [ -d "$LOCK_DIR" ]; then
   # set -e 下では失敗する command substitution が exit を誘発するため || true を必ず付ける
@@ -34,19 +39,20 @@ if [ -d "$LOCK_DIR" ]; then
   if [[ "$_lk_pid" =~ ^[0-9]+$ ]]; then
     _cur_start=$(ps -o lstart= -p "$_lk_pid" 2>/dev/null || true)
     if ! kill -0 "$_lk_pid" 2>/dev/null; then
-      rm -rf "$LOCK_DIR"                        # 死んだ PID → 即 stale
-    elif [ -n "$_lk_start" ] && [ "$_cur_start" != "$_lk_start" ]; then
-      rm -rf "$LOCK_DIR"                        # 起動時刻不一致 = pid 再利用の別プロセス → stale
+      rm -rf "$LOCK_DIR"                        # ① 死んだ PID → 即 stale
+    elif [ -n "$_lk_start" ] && [ -n "$_cur_start" ] && [ "$_cur_start" != "$_lk_start" ]; then
+      rm -rf "$LOCK_DIR"                        # ② 起動時刻不一致 = pid 再利用の別プロセス → stale
+                                                #    （cur が空=ps失敗時は steal しない保守側に倒す）
     elif [ -z "$_lk_start" ] && [ "$_lk_age" -gt 1800 ]; then
-      rm -rf "$LOCK_DIR"                        # 起動時刻未記録(旧lock)のみ TTL backstop（移行期の一度きり）
+      rm -rf "$LOCK_DIR"                        # ③ 起動時刻未記録(旧lock)のみ TTL backstop（一度きり）
     fi
-    # start 一致 = 同一 live プロセス → 時間無関係に絶対 steal しない（race を源から排除）
+    # 起動時刻一致 = 同一 live プロセス → 時間無関係に絶対 steal しない
   elif [ "$_lk_age" -gt 600 ]; then
     rm -rf "$LOCK_DIR"                          # pid 空/非数値（mkdir〜pid書込 間クラッシュ）の TTL 掃除
   fi
 fi
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-  exit 0                                        # 別の更新が実行中 → skip（べき等）
+  exit 0                                        # 別の更新が保持中 → skip（べき等）
 fi
 echo $$ > "$LOCK_DIR/pid"
 ps -o lstart= -p $$ 2>/dev/null > "$LOCK_DIR/start" || true  # プロセス同一性トークン
