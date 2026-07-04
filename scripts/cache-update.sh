@@ -14,24 +14,34 @@ init_cache_dir
 # lock 所有権を cache-update.sh 側に集約する。これにより launchd の定期実行と
 # SessionStart hook の即時更新が競合せず（二重更新防止）、正常/異常終了どちらでも
 # trap で必ず解放される（session-start hook 側の lock leak も同時解消）。
-# stale lock（死んだ PID or 10分 TTL 超）は掃除してから取得する。
+#
+# 位置づけは「二重更新を避けるベストエフォート dedup」。cache 書き込み自体は mktemp+mv で
+# atomic なので、万一ロックをすり抜けて更新が並走しても破損しない（最後の mv が勝つ）。
+#
+# stale 掃除の原則: 生きている数値 pid の owner は原則 steal しない。これにより「live owner を
+# TTL で奪う → owner の trap が他者の lock を誤削除する」race を源から断つ。死んだ pid は即掃除、
+# 生きていても 1800s 超は pid 再利用による永続ロックの backstop として掃除する。
 _now_lock=$(date +%s)
 if [ -d "$LOCK_DIR" ]; then
   _lk_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null)
   _lk_mtime=$(stat -f %m "$LOCK_DIR" 2>/dev/null || echo 0)
-  if [[ "$_lk_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$_lk_pid" 2>/dev/null; then
-    rm -rf "$LOCK_DIR"                          # 死んだ PID
-  elif [ "$(( _now_lock - _lk_mtime ))" -gt 600 ]; then
-    rm -rf "$LOCK_DIR"                          # TTL 超過（実行最大時間超え）
+  _lk_age=$(( _now_lock - _lk_mtime ))
+  if [[ "$_lk_pid" =~ ^[0-9]+$ ]]; then
+    if ! kill -0 "$_lk_pid" 2>/dev/null; then
+      rm -rf "$LOCK_DIR"                        # 死んだ PID → 即 stale
+    elif [ "$_lk_age" -gt 1800 ]; then
+      rm -rf "$LOCK_DIR"                        # 生きているが 1800s 超 → pid 再利用 backstop
+    fi
+  elif [ "$_lk_age" -gt 600 ]; then
+    rm -rf "$LOCK_DIR"                          # pid 空/非数値（mkdir〜pid書込 間クラッシュ）の TTL 掃除
   fi
 fi
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   exit 0                                        # 別の更新が実行中 → skip（べき等）
 fi
 echo $$ > "$LOCK_DIR/pid"
-# 正常/異常/シグナル終了いずれでも lock と TMP_FILE を解放（SIGKILL のみ次回 stale cleanup）。
-# ownership-safe: 自プロセスが TTL 超過で別プロセスに steal され lock が再取得された後に、
-# 自分の EXIT trap が「他者の」lock を消して二重起動防止を壊さないよう、pid が自分の時だけ削除。
+# ownership-safe 解放: pid が自分の時のみ削除（steal 済みなら他者 lock を消さない）。
+# live owner は上記で steal されないため、この解放が他者 lock を消す race は実質発生しない。
 trap '[ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK_DIR"; [ -n "${TMP_FILE:-}" ] && rm -f "$TMP_FILE"' EXIT
 
 TMP_FILE=$(mktemp -t ai_usage_cache.XXXXXX)
