@@ -4,6 +4,12 @@
 <dict>
   <key>Label</key>
   <string>com.aiorg.usage-monitor</string>
+  <!-- ProgramArguments[0] は /opt/homebrew/bin/bash 必須（/bin/bash に変えるな）。
+       理由: cache-update.sh は外部ボリューム(/Volumes/EX_SSD)上にあり、macOS TCC の
+       「Removable Volumes」制限で、TCC 付与済みの Homebrew bash だけが読める。
+       システムの /bin/bash は "Operation not permitted"(exit 126) になる（Issue #24）。
+       外部スクリプトを program として直接 exec するのも禁止（EX_CONFIG(78) penalty box）。
+       memory: feedback_macos_tcc_removable_volumes -->
   <key>ProgramArguments</key>
   <array>
     <string>/opt/homebrew/bin/bash</string>
