@@ -112,7 +112,7 @@ case "$ROUTING_MODE" in
   protect_codex)   echo "⚠️  [Codex-Save] Codex low | color=#FF9500 font=Menlo size=12"
                    echo "  Claude-centric until weekly reset | font=Menlo size=11 color=#888888" ;;
   claude_first)    echo "🔵 [Claude-First] | color=#007AFF font=Menlo size=12"
-                   echo "  Codex > Claude: バランス調整中 | font=Menlo size=11 color=#888888" ;;
+                   echo "  Claude > Codex: 余ったClaude優先でCodex温存 | font=Menlo size=11 color=#888888" ;;
   *)               echo "🟢 [Balanced] | color=#34C759 font=Menlo size=12" ;;
 esac
 echo "---"

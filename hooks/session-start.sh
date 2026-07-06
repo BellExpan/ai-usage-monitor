@@ -120,7 +120,8 @@ EOF
 [AI使用量司令塔] 🔵 [Claude-First]${FRESH_NOTE}
 ${CLA_LINE}
 ${CDX_LINE}
-→ Codex残量がClaudeより多い。バランス調整中
+→ Claude残量がCodexより多い。余っているClaudeを使いCodexを温存
+→ 調査/要約/レビューも当面Claudeで消化（Codexは週次リセットまで温存）
 EOF
     ;;
   *)  # normal / balanced

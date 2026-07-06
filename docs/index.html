@@ -303,8 +303,8 @@ ai-org-progress write dbg 0 0 "原因特定: setActive の順序"</code></pre>
       <tr><td class="wn">protect_codex</td><td>[Codex-Save]</td><td>Codex 5h残 &lt; 20% または 週次残 &lt; 動的閾値</td><td>Codex 枯渇 → Claude を維持</td></tr>
       <tr><td class="y">codex_burn</td><td>🔥 [Burn-Codex]</td><td>Codex に使い切れない余剰・Claude は余剰なし</td><td>Codex を積極消費</td></tr>
       <tr><td class="y">claude_burn</td><td>🔥 [Burn-Claude]</td><td>Claude に余剰・Codex は余剰なし</td><td>Claude を積極消費</td></tr>
-      <tr><td class="y">codex_first</td><td>[Codex-First +N%]</td><td>ギャップ &gt; +10%（Claude の方が余裕）</td><td>調査・レビューは Codex へ</td></tr>
-      <tr><td class="b">claude_first</td><td>[Claude-First +N%]</td><td>ギャップ &lt; −10%（Codex の方が余裕）</td><td>Claude 優先</td></tr>
+      <tr><td class="y">codex_first</td><td>[Codex-First -N%]</td><td>ギャップ &lt; −10%（Codex の方が余裕）</td><td>余っている Codex へ（調査・要約・レビュー）</td></tr>
+      <tr><td class="b">claude_first</td><td>[Claude-First +N%]</td><td>ギャップ &gt; +10%（Claude の方が余裕）</td><td>余っている Claude 優先（Codex 温存）</td></tr>
       <tr><td class="g">normal</td><td>[Balanced +N%]</td><td>ギャップ ±10% 以内</td><td>バランス（タスク種別で振る）</td></tr>
     </table>
     <p><b>動的閾値</b>: Claude 保護閾値（危機/温存）は <b>リセットまでの残り時間でスケール</b>（<code>threshold = base × hours_until_reset / 168</code>、危機 base=5% / 温存 base=15%）。リセット直前なら多少残量が少なくても問題なし、遠いほど厳しく保護。Codex 週次閾値もリセットまで 24h/48h/それ以上で 3% / 5% / 10% と動的。</p>
