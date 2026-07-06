@@ -8,6 +8,8 @@ set -euo pipefail
 source "$(dirname "$0")/lib/cache-path.sh"
 # shellcheck source=lib/reset-label.sh
 source "$(dirname "$0")/lib/reset-label.sh"  # roll_resets_at_forward（ロールオーバー投影・#18）
+# shellcheck source=lib/routing-mode.sh
+source "$(dirname "$0")/lib/routing-mode.sh"  # aum_decide_routing_mode（バランスギャップ判定・#28）
 init_cache_dir
 
 # ── 単一実行ロック（Issue #24）──────────────────────────────
@@ -246,74 +248,18 @@ if [ "${CDX_WEEK_RESETS_AT:-0}" -gt "$_NOW" ]; then
   [ "$CDX_DAYS_UNTIL_RESET" -eq 0 ] && CDX_DAYS_UNTIL_RESET=1  # 24h未満でも1d扱い（閾値用）
 fi
 
-# ── ルーティングモード判定（バランスギャップベース）──
-# BALANCE_GAP = Claude7d残 - Codex週残（+ = Claude余裕あり、- = Codex余裕あり）
+# ── ルーティングモード判定（バランスギャップベース・lib/routing-mode.sh に集約 #28）──
+# BALANCE_GAP = Claude7d残 - Codex週残（+ = Claude余裕あり → claude_first / - = Codex余裕あり → codex_first）
+# 判定ロジックは純関数 aum_decide_routing_mode に切り出し、tests/routing-mode.bats で方向を固定。
+# 入力を整数化して渡す（displayPrice 等の小数は %.* で除去）。
 CDX_5H_REM_INT=${CDX_5H_REMAINING_PCT%.*}
 CDX_WEEK_REM_INT=${CDX_WEEK_REMAINING_PCT%.*}
 CLA_7D_REM_INT=${CLA_7D_REMAINING_PCT%.*}
-# CDX_RATE_LIMITS_FRESH=0 の場合は Codex データが stale/取得失敗 → 満タン誤認を防ぐため GAP=0 扱い
-if [ "${CDX_RATE_LIMITS_FRESH:-0}" = "1" ]; then
-  BALANCE_GAP=$(( ${CLA_7D_REM_INT:-100} - ${CDX_WEEK_REM_INT:-100} ))
-else
-  BALANCE_GAP=0  # stale data → バランス中として扱い誤ルーティング防止
-fi
-
-# Codex使用可否: 5h残 >= 20% かつ リセット考慮の動的週次閾値以上
-CDX_AVAILABLE=1
-[ "${CDX_5H_REM_INT:-100}" -lt 20 ] && CDX_AVAILABLE=0
-if   [ "${CDX_HOURS_UNTIL_RESET:-168}" -le 24 ]; then _CDX_WEEK_THR=3
-elif [ "${CDX_HOURS_UNTIL_RESET:-168}" -le 48 ]; then _CDX_WEEK_THR=5
-else                                                   _CDX_WEEK_THR=10
-fi
-[ "${CDX_WEEK_REM_INT:-100}" -lt "$_CDX_WEEK_THR" ] && CDX_AVAILABLE=0
-
-# バランスギャップでモード決定（±10%以内を目標）
-# ── ルーティングモード判定 ──────────────────────────────────
-# 優先順位: Claude保護 > Codex保護 > Burn > バランス
-#
-# 【Claude保護閾値】リセットまでの時間でスケール
-#   threshold = base × (hours_until_reset / 168)
-#   例) save基準15%・残り14h → 15×14/168=1.3%→min2% → 15%あっても問題なし
-#       save基準15%・残り160h → 14.3% → 15%は危険
-# 切り上げ(ceil)で計算: floor だとコメント通りの保護閾値より1低くなる (#41)
-_CLA_CRIT_THR=$(awk "BEGIN{v=5*${CLA_7D_HOURS_UNTIL_RESET:-168}/168; c=int(v); if(v>c)c++; if(c<1)c=1; printf \"%d\", c}")
-_CLA_SAVE_THR=$(awk "BEGIN{v=15*${CLA_7D_HOURS_UNTIL_RESET:-168}/168; c=int(v); if(v>c)c++; if(c<2)c=2; printf \"%d\", c}")
-
-# 【Burn機会検出】リセットまでに使いきれない余剰がある = 積極消費すべき
-#   実消費ペース: 約20%/day（オーナー報告: 1日15-25%）
-#   projected_at_reset = remaining% - (hours_until_reset × 20 / 24)
-#   projected > 25% → リセット後も25%以上余る → burn機会あり
 DAILY_BURN_PCT=${DAILY_BURN_PCT:-20}  # 環境変数で上書き可能（デフォルト: 20%/day）
-# Burn判定: fresh data かつ reset epoch 既知の場合のみ算出（stale/未取得時は burn=0）
-_CDX_PROJECTED=0; _CDX_BURN=0
-if [ "${CDX_RATE_LIMITS_FRESH:-0}" = "1" ] && [ "${CDX_HOURS_UNTIL_RESET:-0}" -gt 0 ]; then
-  _CDX_PROJECTED=$(awk "BEGIN{v=${CDX_WEEK_REM_INT:-0}-${CDX_HOURS_UNTIL_RESET}*${DAILY_BURN_PCT}/24; if(v<0)v=0; printf \"%d\", v}")
-  [ "$_CDX_PROJECTED" -ge 25 ] && _CDX_BURN=1
-fi
 
-_CLA_PROJECTED=0; _CLA_BURN=0
-if [ "${CLA_OAUTH_FRESH:-0}" = "1" ] && [ "${CLA_7D_HOURS_UNTIL_RESET:-0}" -gt 0 ]; then
-  _CLA_PROJECTED=$(awk "BEGIN{v=${CLA_7D_REM_INT:-0}-${CLA_7D_HOURS_UNTIL_RESET}*${DAILY_BURN_PCT}/24; if(v<0)v=0; printf \"%d\", v}")
-  [ "$_CLA_PROJECTED" -ge 25 ] && _CLA_BURN=1
-fi
-
-if   [ "${CLA_7D_REM_INT:-100}" -lt "$_CLA_CRIT_THR" ]; then
-  ROUTING_MODE="claude_critical"  # 緊急: 全力でCodexへ逃がす
-elif [ "${CLA_7D_REM_INT:-100}" -lt "$_CLA_SAVE_THR" ]; then
-  ROUTING_MODE="save_claude"      # Codex最大活用でClaudeを温存
-elif [ "$CDX_AVAILABLE" -eq 0 ]; then
-  ROUTING_MODE="protect_codex"    # Codex枯渇 → Claude維持
-elif [ "$_CDX_BURN" -eq 1 ] && [ "$_CLA_BURN" -eq 0 ]; then
-  ROUTING_MODE="codex_burn"       # Codexリセット前に余剰あり → ガンガンCodexへ
-elif [ "$_CLA_BURN" -eq 1 ] && [ "$_CDX_BURN" -eq 0 ]; then
-  ROUTING_MODE="claude_burn"      # Claudeリセット前に余剰あり → Claude積極使用
-elif [ "$BALANCE_GAP" -gt 10 ]; then
-  ROUTING_MODE="codex_first"      # Claude > Codex (+10%超) → Codex優先
-elif [ "$BALANCE_GAP" -lt -10 ]; then
-  ROUTING_MODE="claude_first"     # Codex > Claude (-10%超) → Claude優先
-else
-  ROUTING_MODE="normal"           # ±10%以内 or 両方burn → バランス中
-fi
+# 出力グローバルを設定: ROUTING_MODE / BALANCE_GAP / CDX_AVAILABLE /
+#                       CDX_PROJECTED_AT_RESET / CLA_PROJECTED_AT_RESET
+aum_decide_routing_mode
 
 # ── Codex未活用警告フラグ（Issue #5: 判定cache側集約、Issue #6: epoch判定）──
 # CDX_WEEK_RESETS_AT（将来epoch）を使い「リセットから1日以上経過かつ週残90%以上」で判定。
@@ -372,8 +318,8 @@ fi
   echo "CDX_RATE_LIMITS_FRESH=$CDX_RATE_LIMITS_FRESH"
   echo "ROUTING_MODE=$ROUTING_MODE"
   echo "BALANCE_GAP=$BALANCE_GAP"
-  echo "CDX_PROJECTED_AT_RESET=$_CDX_PROJECTED"
-  echo "CLA_PROJECTED_AT_RESET=$_CLA_PROJECTED"
+  echo "CDX_PROJECTED_AT_RESET=$CDX_PROJECTED_AT_RESET"
+  echo "CLA_PROJECTED_AT_RESET=$CLA_PROJECTED_AT_RESET"
   echo "CDX_UNDERUSE_WARN=$CDX_UNDERUSE_WARN"
 } > "$TMP_FILE"
 

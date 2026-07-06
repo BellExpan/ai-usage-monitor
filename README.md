@@ -292,8 +292,8 @@ milestone % が向くのは「ステップ数が事前に確定できる定型�
 | `protect_codex` | `[Codex-Save]` | Codex 5h残 < 20% または 週次残 < 動的閾値 | Codex 枯渇 → Claude を維持 |
 | `codex_burn` | 🔥 `[Burn-Codex]` | Codex にリセットまで使い切れない余剰、Claude は余剰なし | Codex を積極消費 |
 | `claude_burn` | 🔥 `[Burn-Claude]` | Claude に余剰、Codex は余剰なし | Claude を積極消費 |
-| `codex_first` | `[Codex-First +N%]` | ギャップ > +10%（Claude の方が余裕） | 調査・レビューは Codex へ |
-| `claude_first` | `[Claude-First +N%]` | ギャップ < −10%（Codex の方が余裕） | Claude 優先 |
+| `codex_first` | `[Codex-First -N%]` | ギャップ < −10%（Codex の方が余裕） | 余っている Codex へ（調査・要約・レビュー） |
+| `claude_first` | `[Claude-First +N%]` | ギャップ > +10%（Claude の方が余裕） | 余っている Claude 優先（Codex 温存） |
 | `normal` | `[Balanced +N%]` | ギャップ ±10% 以内 | バランス（タスク種別で振る） |
 
 **動的閾値**: Claude 保護閾値（危機/温存）は **リセットまでの残り時間でスケール**する（`threshold = base × hours_until_reset / 168`、危機 base=5% / 温存 base=15%）。リセット直前なら多少残量が少なくても問題なし、リセットが遠いほど厳しく保護する。Codex の週次閾値もリセットまで 24h/48h/それ以上で 3% / 5% / 10% と動的。
