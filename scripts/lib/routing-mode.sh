@@ -10,7 +10,7 @@
 #   ⚠️ 2026-07-06 Issue #28: この first 系2分岐が cache-update.sh で逆転していた
 #      （Codex余裕なのに claude_first を提案しギャップを広げる回帰）。
 #      判定を本 lib に集約し bats（tests/routing-mode.bats）で方向を固定した。
-#      hooks/session-start.sh:59 の自動昇格（Codex余裕→codex_first）が正方向で、
+#      hooks/session-start.sh の自動昇格（Codex余裕→codex_first）が正方向で、
 #      cache-update.sh 側だけが逆だったのが根拠。
 #
 # 優先順位: Claude保護 > Codex保護 > Burn(リセット前の使い切り) > バランス(first / normal)
@@ -41,6 +41,16 @@ aum_decide_routing_mode() {
   local cdx_hrs="${CDX_HOURS_UNTIL_RESET:-168}"
   local cla_hrs="${CLA_7D_HOURS_UNTIL_RESET:-168}"
   local burn="${DAILY_BURN_PCT:-20}"
+
+  # 入力の数値ガード: 非数値・空は安全なデフォルトへ丸める。上流の整数化(%.*)が崩れても
+  # [ ] の "integer expression expected" で cache-update.sh 全体（set -euo pipefail）を
+  # abort させない（純関数としての堅牢契約）。残量%・時間はいずれも非負整数。
+  case "$cla7d"   in ''|*[!0-9]*) cla7d=100 ;; esac
+  case "$cdx5h"   in ''|*[!0-9]*) cdx5h=100 ;; esac
+  case "$cdxwk"   in ''|*[!0-9]*) cdxwk=100 ;; esac
+  case "$cdx_hrs" in ''|*[!0-9]*) cdx_hrs=168 ;; esac
+  case "$cla_hrs" in ''|*[!0-9]*) cla_hrs=168 ;; esac
+  case "$burn"    in ''|*[!0-9]*) burn=20 ;; esac
 
   # BALANCE_GAP: stale データ時は 0 として扱う（満タン誤認による誤ルーティング防止）
   if [ "$cdx_fresh" = "1" ]; then
