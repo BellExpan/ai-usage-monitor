@@ -67,6 +67,9 @@ EOF
 }
 
 @test "既存 cache がある状態で OAuth 取得失敗 -> 前回残量保持 + CLA_VALUES_STALE=1" {
+  # cache-update.sh は macOS 前提（Keychain / BSD date -v / DARWIN_USER_TEMP_DIR）。
+  # Linux CI では skip する。macOS runner 復旧後にフル実行へ戻す（#40）。
+  [ "$(uname)" = "Darwin" ] || skip "macOS only (see #40)"
   cat > "$CACHE" <<EOF
 TIMESTAMP=1
 CLA_OAUTH_FRESH=1
@@ -91,6 +94,9 @@ EOF
 }
 
 @test "ccusage daily が exit 0 かつ daily:[] -> トークン 0 を書き stale にしない" {
+  # cache-update.sh は macOS 前提（Keychain / BSD date -v / DARWIN_USER_TEMP_DIR）。
+  # Linux CI では skip する。macOS runner 復旧後にフル実行へ戻す（#40）。
+  [ "$(uname)" = "Darwin" ] || skip "macOS only (see #40)"
   cat > "$CACHE" <<EOF
 TIMESTAMP=1
 CLA_OAUTH_FRESH=1
@@ -109,6 +115,9 @@ EOF
 }
 
 @test "ccusage daily が非ゼロ終了 -> トークンが 0 に化けず前回値保持 + CDX_TOKENS_STALE=1" {
+  # cache-update.sh は macOS 前提（Keychain / BSD date -v / DARWIN_USER_TEMP_DIR）。
+  # Linux CI では skip する。macOS runner 復旧後にフル実行へ戻す（#40）。
+  [ "$(uname)" = "Darwin" ] || skip "macOS only (see #40)"
   cat > "$CACHE" <<EOF
 TIMESTAMP=1
 CLA_OAUTH_FRESH=1
@@ -133,6 +142,9 @@ EOF
 }
 
 @test "破損した数値 cache は復元せず awk エラーなしで既定値を使う" {
+  # cache-update.sh は macOS 前提（Keychain / BSD date -v / DARWIN_USER_TEMP_DIR）。
+  # Linux CI では skip する。macOS runner 復旧後にフル実行へ戻す（#40）。
+  [ "$(uname)" = "Darwin" ] || skip "macOS only (see #40)"
   cat > "$CACHE" <<EOF
 TIMESTAMP=1
 CLA_5H_REMAINING_PCT=abc

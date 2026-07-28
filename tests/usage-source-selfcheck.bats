@@ -1,6 +1,11 @@
 #!/usr/bin/env bats
 # Tests for usage-source-selfcheck.sh.
 
+# BSD(date -v) / GNU(date -d) 両対応の「N 日前」ヘルパー
+_days_ago() {
+  date -v-"$1"d +%Y-%m-%d 2>/dev/null || date -d "$1 days ago" +%Y-%m-%d
+}
+
 setup() {
   REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   SELF_CHECK="$REPO_ROOT/scripts/usage-source-selfcheck.sh"
@@ -12,8 +17,9 @@ setup() {
   mkdir -p "$CACHE_DIR" "$HOME/.codex/sessions/2026/07/28"
   CACHE="$CACHE_DIR/cache"
   TODAY="$(date +%Y-%m-%d)"
-  YESTERDAY="$(date -v-1d +%Y-%m-%d)"
-  FIVE_DAYS_AGO="$(date -v-5d +%Y-%m-%d)"
+  # date -v は BSD 専用。Linux CI（ubuntu-latest）でも動くよう両対応にする。
+  YESTERDAY="$(_days_ago 1)"
+  FIVE_DAYS_AGO="$(_days_ago 5)"
   NOW="$(date +%s)"
   FUTURE=$(( NOW + 604800 ))
 }
