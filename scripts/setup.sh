@@ -11,6 +11,7 @@ SELFCHECK_PLIST_SRC="$REPO_DIR/launchd/$SELFCHECK_PLIST_NAME.plist"
 SELFCHECK_PLIST_DST="$HOME/Library/LaunchAgents/$SELFCHECK_PLIST_NAME.plist"
 SWIFTBAR_PLUGIN_DIR="${SWIFTBAR_PLUGIN_DIR:-$HOME/Library/Application Support/SwiftBar/Plugins}"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+export AUM_LIB_DIR="$REPO_DIR/scripts/lib"   # setup.sh 内の python ブロックが settings_json.py を import する
 
 # shellcheck source=lib/launchd-deploy.sh
 source "$REPO_DIR/scripts/lib/launchd-deploy.sh"  # aum_render_plist / aum_deploy / aum_verify_health（#24）
@@ -96,21 +97,9 @@ fi
 # 4. Claude Code SessionStart hook
 if command -v python3 >/dev/null && [ -f "$CLAUDE_SETTINGS" ]; then
   python3 - "$CLAUDE_SETTINGS" "$REPO_DIR/hooks/session-start.sh" <<'PYEOF'
-import json, sys
-def _atomic_write_json(path, data):
-    """settings.json は Claude Code の生命線。途中失敗で壊さないよう temp→os.replace で原子的に置換する。"""
-    import os, tempfile
-    d = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(dir=d, prefix=".settings-", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-        os.replace(tmp, path)
-    except BaseException:
-        try: os.unlink(tmp)
-        except OSError: pass
-        raise
+import json, os, sys
+sys.path.insert(0, os.environ["AUM_LIB_DIR"])
+from settings_json import atomic_write_json
 settings_path, hook_path = sys.argv[1], sys.argv[2]
 with open(settings_path) as f:
     d = json.load(f)
@@ -119,7 +108,7 @@ ss_hooks = hooks.setdefault("SessionStart", [])
 entry = {"type": "command", "command": hook_path}
 if not any(h.get("command") == hook_path for h in ss_hooks):
     ss_hooks.append(entry)
-    _atomic_write_json(settings_path, d)
+    atomic_write_json(settings_path, d)
     print("✓ Claude Code SessionStart hook 登録済み")
 else:
     print("✓ SessionStart hook は登録済みです")
@@ -156,21 +145,9 @@ echo "✓ subagent-watch launchd 登録 (10s 周期で死活 reap)"
 # Agent hooks を settings.json に idempotent 登録 (既存登録があれば no-op)
 if command -v python3 >/dev/null && [ -f "$CLAUDE_SETTINGS" ]; then
   python3 - "$CLAUDE_SETTINGS" "$HOOKS_DST/enforce_subagent_progress.sh" "$HOOKS_DST/auto_pin_subagent.sh" <<'PYEOF'
-import json, sys
-def _atomic_write_json(path, data):
-    """settings.json は Claude Code の生命線。途中失敗で壊さないよう temp→os.replace で原子的に置換する。"""
-    import os, tempfile
-    d = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(dir=d, prefix=".settings-", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-        os.replace(tmp, path)
-    except BaseException:
-        try: os.unlink(tmp)
-        except OSError: pass
-        raise
+import json, os, sys
+sys.path.insert(0, os.environ["AUM_LIB_DIR"])
+from settings_json import atomic_write_json
 settings_path, enforce_path, autopin_path = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(settings_path) as f:
     d = json.load(f)
@@ -188,7 +165,7 @@ def ensure(event, cmd):
     return True
 changed = ensure("PreToolUse", enforce_path) | ensure("PostToolUse", autopin_path)
 if changed:
-    _atomic_write_json(settings_path, d)
+    atomic_write_json(settings_path, d)
     print("✓ Agent hooks を settings.json に登録")
 else:
     print("✓ Agent hooks は既に登録済み")
@@ -203,21 +180,9 @@ echo "✓ claude_turn_state hook を同期"
 
 if command -v python3 >/dev/null && [ -f "$CLAUDE_SETTINGS" ]; then
   python3 - "$CLAUDE_SETTINGS" "$HOOKS_DST/claude_turn_state.sh" <<'PYEOF'
-import json, sys
-def _atomic_write_json(path, data):
-    """settings.json は Claude Code の生命線。途中失敗で壊さないよう temp→os.replace で原子的に置換する。"""
-    import os, tempfile
-    d = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(dir=d, prefix=".settings-", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-        os.replace(tmp, path)
-    except BaseException:
-        try: os.unlink(tmp)
-        except OSError: pass
-        raise
+import json, os, sys
+sys.path.insert(0, os.environ["AUM_LIB_DIR"])
+from settings_json import atomic_write_json
 settings_path, hook = sys.argv[1], sys.argv[2]
 with open(settings_path) as f:
     d = json.load(f)
@@ -236,7 +201,7 @@ for event, arg in WIRING:
     arr.append({"hooks": [{"type": "command", "command": cmd}]})
     changed = True
 if changed:
-    _atomic_write_json(settings_path, d)
+    atomic_write_json(settings_path, d)
     print("✓ ターン状態 hook を登録 (UserPromptSubmit/PreToolUse/Notification/Stop)")
 else:
     print("✓ ターン状態 hook は既に登録済み")

@@ -8,7 +8,7 @@
 #   同じ `tasks/*.output` を作るため混入すること、(c) ターン状態が表示に無いこと。
 #   このライブラリは (a)(c) を単一情報源として解決する。
 #
-# ターン状態の書き手: ~/.claude/hooks/claude-turn-state.sh（hook）
+# ターン状態の書き手: hooks/turn-state.sh（setup.sh が ~/.claude/hooks/claude_turn_state.sh へ install）
 #   フォーマット: "<busy|wait|idle> <epoch> <ITERM_SESSION_ID>"
 #
 # 設計方針: 全関数 fail-open（対象が無ければ 0 / 空 / unknown を返して exit 0）。
@@ -28,8 +28,12 @@ _ss_fresh_mins() {
 #   入口を 1 箇所に集約し、UUID 相当の文字だけ通す（path traversal / AppleScript 注入の遮断）。
 #   Codex レビュー指摘: statusline 側の stdin session_id と ITERM_SESSION_ID fallback が
 #   サニタイズ漏れしていたため、各関数の入口で必ずこれを通す。
+#   ITERM_SESSION_ID は `w2t0p0:<UUID>` 形式なので、`:` より前の pane 座標は先に落とす。
+#   （session_id 側は `:` を含まないため無害。生の ITERM_SESSION_ID をそのまま渡しても
+#     正しく <UUID> として扱われる＝入口の契約を sanitizer 1 箇所で担保する）
 _ss_sanitize_id() {
-  printf '%s' "${1:-}" | LC_ALL=C tr -cd 'A-Za-z0-9-' | cut -c1-64
+  local raw="${1:-}"
+  printf '%s' "${raw##*:}" | LC_ALL=C tr -cd 'A-Za-z0-9-' | cut -c1-64
 }
 
 # session_tasks_dir <session_id>
@@ -95,8 +99,7 @@ turn_state_iterm_id() {
   f="$(_ss_state_dir)/turn-${sid}.state"
   [ -f "$f" ] || return 0
   v="$(LC_ALL=C awk 'NR==1{print $3}' "$f" 2>/dev/null)"
-  v="${v##*:}"   # w2t0p0:UUID → UUID
-  _ss_sanitize_id "$v"
+  _ss_sanitize_id "$v"   # w2t0p0:UUID → UUID の正規化も sanitizer が担う
 }
 
 # turn_banner <state> <own_bg_count> → statusline 行頭に出す状態バナー（色なし）

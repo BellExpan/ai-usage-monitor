@@ -179,6 +179,21 @@ _age_out() {  # _age_out <file> <minutes-ago>
   [ "$output" = "1" ]
 }
 
+@test "sanitizer accepts a raw ITERM_SESSION_ID and strips its pane prefix" {
+  run _ss_sanitize_id "w2t0p0:ABC-123"
+  [ "$output" = "ABC-123" ]
+}
+
+@test "iterm_set_title_if_changed treats a raw ITERM_SESSION_ID as its UUID" {
+  iterm_set_title_if_changed "✅ x" "w2t0p0:ABC-123"
+  [ -f "$CLAUDE_TURN_STATE_DIR/title-ABC-123" ]
+}
+
+@test "sanitizer leaves a plain UUID session id untouched" {
+  run _ss_sanitize_id "aaaaaaaa-1111-1111-1111-111111111111"
+  [ "$output" = "aaaaaaaa-1111-1111-1111-111111111111" ]
+}
+
 @test "iterm_set_title refuses an id that sanitizes to empty (no osascript)" {
   run iterm_set_title "✅ x" "///"
   [ "$status" -eq 0 ]
