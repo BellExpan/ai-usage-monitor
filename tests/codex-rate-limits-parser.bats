@@ -1,137 +1,129 @@
 #!/usr/bin/env bats
-# Tests for Codex rate_limits parser (Issue #7)
-# Run: bats tests/codex-rate-limits-parser.bats
+# Tests for Codex rate_limits parser.
 
 setup() {
   REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   PARSER="$REPO_ROOT/scripts/lib/parse_codex_rate_limits.py"
   SESS="$(mktemp -d)"
-  mkdir -p "$SESS/2026/06/10"
+  mkdir -p "$SESS/2026/07/28"
 }
 
 teardown() {
   rm -rf "$SESS"
 }
 
-# 有効イベント行: $1=ts $2=p5used $3=p5at $4=wkused $5=wkat
-_valid_line() {
+kv() {
+  printf '%s\n' "$output" | awk -F= -v k="$1" '$1 == k { print $2; exit }'
+}
+
+_legacy_line() {
   printf '{"type":"event_msg","timestamp":"%s","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":%s,"window_minutes":300,"resets_at":%s},"secondary":{"used_percent":%s,"window_minutes":10080,"resets_at":%s}}}}\n' \
     "$1" "$2" "$3" "$4" "$5"
 }
 
-# premium/null マーカー行（週枯渇時に emit される credits 切替イベント）: $1=ts
-_premium_null_line() {
+_week_only_line() {
+  printf '{"type":"event_msg","timestamp":"%s","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":%s,"window_minutes":10080,"resets_at":%s},"secondary":null}}}\n' \
+    "$1" "$2" "$3"
+}
+
+_null_marker_line() {
   printf '{"type":"event_msg","timestamp":"%s","payload":{"type":"token_count","rate_limits":{"limit_id":"premium","primary":null,"secondary":null,"credits":{"has_credits":false,"unlimited":false,"balance":"0"}}}}\n' \
     "$1"
 }
 
-@test "premium/null マーカーをスキップし直近の有効データを採用（週枯渇を正しく検知）" {
-  _valid_line "2026-06-10T08:44:00.000Z" 5.0 1781088377 100.0 1781161744 \
-    > "$SESS/2026/06/10/001-valid.jsonl"
-  _premium_null_line "2026-06-10T08:49:00.000Z" \
-    > "$SESS/2026/06/10/002-premium-null.jsonl"
+@test "new schema primary=10080 secondary=null is classified as week_only" {
+  _week_only_line "2026-07-28T08:44:00.000Z" 2.0 1785823197 \
+    > "$SESS/2026/07/28/001-week-only.jsonl"
+
   run python3 "$PARSER" "$SESS"
+
   [ "$status" -eq 0 ]
-  # p5u p5r p5at wku wkr wkat fresh
-  read -r p5u p5r p5at wku wkr wkat fresh <<< "$output"
-  [ "$p5r" = "95.0" ]
-  [ "$wkr" = "0.0" ]            # 枯渇を正しく検知（100 ではない = バグ再発防止）
-  [ "$wkat" = "1781161744" ]   # resets_at が populated（0 ではない = ↺表示の前提）
-  [ "$p5at" = "1781088377" ]
+  [ "$(kv WK_AVAILABLE)" = "1" ]
+  [ "$(kv WK_WINDOW_MIN)" = "10080" ]
+  [ "$(kv WK_USED_PCT)" = "2.0" ]
+  [ "$(kv WK_RESETS_AT)" = "1785823197" ]
+  [ "$(kv P5_AVAILABLE)" = "0" ]
+  [ "$(kv SCHEMA)" = "week_only" ]
 }
 
-@test "有効データのみ: 正しくパースする" {
-  _valid_line "2026-06-10T08:44:00.000Z" 12.0 1781088377 40.0 1781161744 \
-    > "$SESS/2026/06/10/001-valid.jsonl"
+@test "legacy schema primary=300 secondary=10080 is split into short and week" {
+  _legacy_line "2026-07-28T08:44:00.000Z" 12.0 1781088377 40.0 1781161744 \
+    > "$SESS/2026/07/28/001-legacy.jsonl"
+
   run python3 "$PARSER" "$SESS"
+
   [ "$status" -eq 0 ]
-  read -r p5u p5r p5at wku wkr wkat fresh p5win wkwin <<< "$output"
-  [ "$p5r" = "88.0" ]
-  [ "$wkr" = "60.0" ]
-  [ "$wkat" = "1781161744" ]
+  [ "$(kv P5_AVAILABLE)" = "1" ]
+  [ "$(kv P5_USED_PCT)" = "12.0" ]
+  [ "$(kv P5_REMAINING_PCT)" = "88.0" ]
+  [ "$(kv P5_WINDOW_MIN)" = "300" ]
+  [ "$(kv WK_AVAILABLE)" = "1" ]
+  [ "$(kv WK_USED_PCT)" = "40.0" ]
+  [ "$(kv WK_REMAINING_PCT)" = "60.0" ]
+  [ "$(kv WK_WINDOW_MIN)" = "10080" ]
+  [ "$(kv SCHEMA)" = "legacy_5h_week" ]
 }
 
-@test "window_minutes を出力する（ロールフォワード投影の前提・Issue #18）" {
-  _valid_line "2026-06-10T08:44:00.000Z" 12.0 1781088377 40.0 1781161744 \
-    > "$SESS/2026/06/10/001-valid.jsonl"
+@test "only null marker events produce none schema and safe defaults" {
+  _null_marker_line "2026-07-28T08:49:00.000Z" \
+    > "$SESS/2026/07/28/001-null-marker.jsonl"
+
   run python3 "$PARSER" "$SESS"
+
   [ "$status" -eq 0 ]
-  read -r p5u p5r p5at wku wkr wkat fresh p5win wkwin <<< "$output"
-  [ "$p5win" = "300" ]      # 5h 枠
-  [ "$wkwin" = "10080" ]    # 週枠
+  [ "$(kv P5_AVAILABLE)" = "0" ]
+  [ "$(kv P5_REMAINING_PCT)" = "100" ]
+  [ "$(kv P5_RESETS_AT)" = "0" ]
+  [ "$(kv WK_AVAILABLE)" = "0" ]
+  [ "$(kv WK_REMAINING_PCT)" = "100" ]
+  [ "$(kv WK_RESETS_AT)" = "0" ]
+  [ "$(kv FRESH)" = "0" ]
+  [ "$(kv SCHEMA)" = "none" ]
 }
 
-@test "rate_limits が一切ない: window_minutes も 0 デフォルト（9値出力）" {
-  run python3 "$PARSER" "$SESS"
-  [ "$status" -eq 0 ]
-  [ "$output" = "0 100 0 0 100 0 0 0 0" ]
-}
-
-@test "window_minutes 欠落イベントでも 0 デフォルトでクラッシュしない" {
-  printf '{"type":"event_msg","timestamp":"2026-06-10T08:44:00.000Z","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":30.0,"resets_at":1781088377},"secondary":{"used_percent":40.0,"resets_at":1781161744}}}}\n' \
-    > "$SESS/2026/06/10/001-no-window.jsonl"
-  run python3 "$PARSER" "$SESS"
-  [ "$status" -eq 0 ]
-  read -r p5u p5r p5at wku wkr wkat fresh p5win wkwin <<< "$output"
-  [ "$p5win" = "0" ]
-  [ "$wkwin" = "0" ]
-}
-
-@test "rate_limits が一切ない: デフォルト '0 100 0 0 100 0 0 0 0'" {
-  run python3 "$PARSER" "$SESS"
-  [ "$status" -eq 0 ]
-  [ "$output" = "0 100 0 0 100 0 0 0 0" ]
-}
-
-@test "同一ファイル内で premium/null が有効イベントの後に来ても有効データを採用" {
-  {
-    _valid_line "2026-06-10T08:44:00.000Z" 5.0 1781088377 100.0 1781161744
-    _premium_null_line "2026-06-10T08:49:00.000Z"
-  } > "$SESS/2026/06/10/001-mixed.jsonl"
-  run python3 "$PARSER" "$SESS"
-  [ "$status" -eq 0 ]
-  read -r p5u p5r p5at wku wkr wkat fresh <<< "$output"
-  [ "$wkr" = "0.0" ]
-  [ "$wkat" = "1781161744" ]
-}
-
-@test "存在しない sessions_dir: クラッシュせずデフォルト出力" {
-  run python3 "$PARSER" "$SESS/nonexistent"
-  [ "$status" -eq 0 ]
-  [ "$output" = "0 100 0 0 100 0 0 0 0" ]
-}
-
-@test "有効イベントの前に壊れ jsonl 行があってもファイルを捨てず採用（RI-1 回帰）" {
+@test "broken jsonl before a valid event does not discard the file" {
   {
     printf '{ this is a truncated broken line\n'
-    _valid_line "2026-06-10T08:44:00.000Z" 5.0 1781088377 100.0 1781161744
-  } > "$SESS/2026/06/10/001-broken-then-valid.jsonl"
+    _legacy_line "2026-07-28T08:44:00.000Z" 5.0 1781088377 100.0 1781161744
+  } > "$SESS/2026/07/28/001-broken-then-valid.jsonl"
+
   run python3 "$PARSER" "$SESS"
+
   [ "$status" -eq 0 ]
-  read -r p5u p5r p5at wku wkr wkat fresh <<< "$output"
-  [ "$wkr" = "0.0" ]            # 壊れ行で捨てず枯渇を検知（100 にフォールバックしない）
-  [ "$wkat" = "1781161744" ]
+  [ "$(kv WK_REMAINING_PCT)" = "0.0" ]
+  [ "$(kv WK_RESETS_AT)" = "1781161744" ]
+  [ "$(kv SCHEMA)" = "legacy_5h_week" ]
 }
 
-@test "片側のみ非 null（secondary=null）でもクラッシュせず採用側を出力" {
-  printf '{"type":"event_msg","timestamp":"2026-06-10T08:44:00.000Z","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":30.0,"window_minutes":300,"resets_at":1781088377},"secondary":null}}}\n' \
-    > "$SESS/2026/06/10/001-half-null.jsonl"
+@test "remaining percentages are clamped to 0..100" {
+  _legacy_line "2026-07-28T08:44:00.000Z" 150.0 1781088377 -5.0 1781161744 \
+    > "$SESS/2026/07/28/001-out-of-range.jsonl"
+
   run python3 "$PARSER" "$SESS"
+
   [ "$status" -eq 0 ]
-  read -r p5u p5r p5at wku wkr wkat fresh <<< "$output"
-  [ "$p5r" = "70.0" ]
-  [ "$p5at" = "1781088377" ]
-  # secondary 欠落 → 週枠は安全側デフォルト（残100% / resets_at 0）
-  [ "$wkr" = "100.0" ]
-  [ "$wkat" = "0" ]
+  [ "$(kv P5_REMAINING_PCT)" = "0.0" ]
+  [ "$(kv WK_REMAINING_PCT)" = "100.0" ]
 }
 
-@test "残量は [0,100] にクランプ（used_percent 異常値防御・RI-3）" {
-  printf '{"type":"event_msg","timestamp":"2026-06-10T08:44:00.000Z","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":150.0,"window_minutes":300,"resets_at":1781088377},"secondary":{"used_percent":-5.0,"window_minutes":10080,"resets_at":1781161744}}}}\n' \
-    > "$SESS/2026/06/10/001-out-of-range.jsonl"
+@test "valid event before a later null marker is still selected" {
+  {
+    _legacy_line "2026-07-28T08:44:00.000Z" 5.0 1781088377 100.0 1781161744
+    _null_marker_line "2026-07-28T08:49:00.000Z"
+  } > "$SESS/2026/07/28/001-mixed.jsonl"
+
   run python3 "$PARSER" "$SESS"
+
   [ "$status" -eq 0 ]
-  read -r p5u p5r p5at wku wkr wkat fresh <<< "$output"
-  [ "$p5r" = "0.0" ]      # 150% used → 残0%（負にしない）
-  [ "$wkr" = "100.0" ]    # -5% used → 残100%（超過しない）
+  [ "$(kv WK_REMAINING_PCT)" = "0.0" ]
+  [ "$(kv WK_RESETS_AT)" = "1781161744" ]
+}
+
+@test "missing sessions dir does not crash" {
+  run python3 "$PARSER" "$SESS/nonexistent"
+
+  [ "$status" -eq 0 ]
+  [ "$(kv SCHEMA)" = "none" ]
+  [ "$(kv P5_REMAINING_PCT)" = "100" ]
+  [ "$(kv WK_REMAINING_PCT)" = "100" ]
 }

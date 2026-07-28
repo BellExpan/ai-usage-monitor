@@ -70,6 +70,8 @@ fi
 
 CDX_5H_REMAINING_PCT=${CDX_5H_REMAINING_PCT:-100}
 CDX_WEEK_REMAINING_PCT=${CDX_WEEK_REMAINING_PCT:-100}
+CDX_5H_AVAILABLE=${CDX_5H_AVAILABLE:-1}
+CDX_WEEK_AVAILABLE=${CDX_WEEK_AVAILABLE:-1}
 # Codex リセット epoch も default（cache 不在時に下の -gt/-le 比較が integer expected で死ぬのを防ぐ）
 CDX_WEEK_RESETS_AT=${CDX_WEEK_RESETS_AT:-0}
 CDX_5H_RESETS_AT=${CDX_5H_RESETS_AT:-0}
@@ -86,12 +88,12 @@ ROUTING_MODE=${ROUTING_MODE:-normal}
 # window 欠落(旧cache)でも label の fallback(週10080/5h300)と整合させ、過去 resets_at なら投影。
 _SL_NOW=$(date +%s)
 case "${CDX_WEEK_RESETS_AT:-0}" in ''|*[!0-9]*) : ;; *)
-  if [ "$CDX_WEEK_RESETS_AT" -gt 0 ] && [ "$CDX_WEEK_RESETS_AT" -le "$_SL_NOW" ]; then
+  if [ "${CDX_WEEK_AVAILABLE:-1}" = "1" ] && [ "$CDX_WEEK_RESETS_AT" -gt 0 ] && [ "$CDX_WEEK_RESETS_AT" -le "$_SL_NOW" ]; then
     CDX_WEEK_REMAINING_PCT=100
   fi ;;
 esac
 case "${CDX_5H_RESETS_AT:-0}" in ''|*[!0-9]*) : ;; *)
-  if [ "$CDX_5H_RESETS_AT" -gt 0 ] && [ "$CDX_5H_RESETS_AT" -le "$_SL_NOW" ]; then
+  if [ "${CDX_5H_AVAILABLE:-1}" = "1" ] && [ "$CDX_5H_RESETS_AT" -gt 0 ] && [ "$CDX_5H_RESETS_AT" -le "$_SL_NOW" ]; then
     CDX_5H_REMAINING_PCT=100
   fi ;;
 esac
@@ -127,7 +129,11 @@ red='\033[31m'
 [ "${CLA_5H_REMAINING_PCT:-100}" -lt 10 ] && CLA_IC="🔴"
 
 # Codex アイコン
-CDX_PCT=${CDX_5H_REMAINING_PCT%.*}
+if [ "${CDX_5H_AVAILABLE:-1}" = "1" ]; then
+  CDX_PCT=${CDX_5H_REMAINING_PCT%.*}
+else
+  CDX_PCT=${CDX_WEEK_REMAINING_PCT%.*}
+fi
 [ "${CDX_PCT:-100}" -ge 50 ] && CDX_IC="🟢" || CDX_IC="🟡"
 [ "${CDX_PCT:-100}" -lt 20 ] && CDX_IC="🔴"
 
@@ -220,7 +226,11 @@ CDX_RESET_LABEL=""
 # window_minutes（cache の CDX_WEEK_WINDOW_MIN、fallback 週=10080）を渡し real-time ロール（#18）
 _cdx_lbl=$(reset_label_from_epoch "${CDX_WEEK_RESETS_AT:-0}" "$_reset_now" "${CDX_WEEK_WINDOW_MIN:-10080}")
 [ -n "$_cdx_lbl" ] && CDX_RESET_LABEL=" ${dim}${_cdx_lbl}${reset}"
-CDX_DISPLAY="${CDX_IC} ${yellow}Codex${reset}:5h${CDX_5H_REMAINING_PCT%.*}%/1w${CDX_WEEK_REMAINING_PCT%.*}%${CDX_RESET_LABEL}"
+if [ "${CDX_5H_AVAILABLE:-1}" = "1" ]; then
+  CDX_DISPLAY="${CDX_IC} ${yellow}Codex${reset}:5h${CDX_5H_REMAINING_PCT%.*}%/1w${CDX_WEEK_REMAINING_PCT%.*}%${CDX_RESET_LABEL}"
+else
+  CDX_DISPLAY="${CDX_IC} ${yellow}Codex${reset}:1w${CDX_WEEK_REMAINING_PCT%.*}%${CDX_RESET_LABEL}"
+fi
 
 [ -n "$parts" ] && printf "%b\n" "$parts"
 

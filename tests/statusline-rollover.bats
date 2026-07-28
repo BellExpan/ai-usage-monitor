@@ -29,6 +29,11 @@ _codex_seg() {
     | sed 's/\x1b\[[0-9;]*m//g' | grep -oE 'Codex:[^ ]+ ↺[^ ]+' | head -1
 }
 
+_usage_line() {
+  echo '{}' | bash "$STATUSLINE" 2>/dev/null \
+    | sed 's/\x1b\[[0-9;]*m//g' | grep 'Codex:' | head -1
+}
+
 @test "週枯渇 + 過去 resets_at → 1w100% ↺Nh に投影（バグ再現の本丸）" {
   cat > "$CACHE" <<EOF
 TIMESTAMP=$(( NOW - 100 ))
@@ -77,4 +82,22 @@ EOF
   run _codex_seg
   [[ "$output" == *"1w97%"* ]]    # 97% のまま（100% に化けない）
   [[ "$output" == *"↺167h"* ]]
+}
+
+@test "Codex 5h unavailable なら存在しない 5h を表示しない" {
+  cat > "$CACHE" <<EOF
+TIMESTAMP=$NOW
+CDX_5H_AVAILABLE=0
+CDX_5H_REMAINING_PCT=100
+CDX_5H_RESETS_AT=0
+CDX_WEEK_AVAILABLE=1
+CDX_WEEK_REMAINING_PCT=98
+CDX_WEEK_RESETS_AT=$(( NOW + 167*3600 ))
+CDX_WEEK_WINDOW_MIN=10080
+CDX_RATE_LIMITS_FRESH=1
+ROUTING_MODE=normal
+EOF
+  run _usage_line
+  [[ "$output" == *"Codex:1w98%"* ]]
+  [[ "$output" != *"Codex:5h"* ]]
 }
