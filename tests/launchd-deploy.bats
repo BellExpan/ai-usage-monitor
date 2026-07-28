@@ -29,6 +29,9 @@ teardown() { rm -rf "$TMPD"; }
 
 # --- render ---
 @test "aum_render_plist expands REPO_DIR and HOME_DIR" {
+  # macOS 依存（BSD stat の mtime 粒度 / ps の出力形式 / launchd plist）。
+  # Linux CI では skip する。macOS self-hosted runner 復旧後にフル実行へ戻す（#40）。
+  [ "$(uname)" = "Darwin" ] || skip "macOS only (see #40)"
   aum_render_plist "$REPO_ROOT/launchd/com.aiorg.usage-monitor.plist" "$FAKE_REPO" "$FAKE_HOME" "$TMPD/out.plist"
   [ -f "$TMPD/out.plist" ]
   # ProgramArguments が [/opt/homebrew/bin/bash, <repo>/scripts/cache-update.sh] であること
@@ -60,6 +63,9 @@ teardown() { rm -rf "$TMPD"; }
 
 # --- drift 検出 ---
 @test "correct plist is NOT drifted" {
+  # macOS 依存（BSD stat の mtime 粒度 / ps の出力形式 / launchd plist）。
+  # Linux CI では skip する。macOS self-hosted runner 復旧後にフル実行へ戻す（#40）。
+  [ "$(uname)" = "Darwin" ] || skip "macOS only (see #40)"
   aum_render_plist "$REPO_ROOT/launchd/com.aiorg.usage-monitor.plist" "$FAKE_REPO" "$FAKE_HOME" "$TMPD/ok.plist"
   run aum_plist_drifted "$TMPD/ok.plist" "$FAKE_REPO"
   [ "$status" -eq 1 ]   # return 1 = drift なし
@@ -112,6 +118,9 @@ EOF
 }
 
 @test "aum_self_heal_if_needed skips within cooldown" {
+  # macOS 依存（BSD stat の mtime 粒度 / ps の出力形式 / launchd plist）。
+  # Linux CI では skip する。macOS self-hosted runner 復旧後にフル実行へ戻す（#40）。
+  [ "$(uname)" = "Darwin" ] || skip "macOS only (see #40)"
   # cooldown マーカーを新鮮な状態で置くと、drift 判定に到達せず即 return 0
   export AI_USAGE_DIR="$TMPD"
   : > "$TMPD/.selfheal-cooldown"
