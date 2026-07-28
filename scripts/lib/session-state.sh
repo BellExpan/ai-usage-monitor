@@ -178,7 +178,7 @@ iterm_apply_state_prefix() {
   base="$(strip_state_prefix "$base")"
   [ -n "$base" ] || return 0
   want="${glyph} ${base}"
-  # 既に望む形なら osascript を呼ばない（毎 refresh の無駄打ち回避）
+  # 既に望む形なら set を呼ばない（読み取りは毎回必要だが、書き込みは差分時のみ）
   [ "$(strip_job_suffix "$cur")" = "$want" ] && return 0
   # AppleScript 文字列に埋めるため引用符・バックスラッシュ・制御文字を除去
   want="$(printf '%s' "$want" | LC_ALL=C tr -d '\000-\037"\\')"

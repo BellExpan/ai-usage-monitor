@@ -411,7 +411,9 @@ line3="${line3}${bash_rows}${ci_rows}"
 
 # Issue #42: iTerm2 のタブタイトルを同じ状態に同期する。
 #   タブバーを見るだけで（terminal をフォーカスせずに）どのタブが終わっているか判別できる。
-#   変化時のみ osascript を呼ぶので、通常の refresh には追加コストが乗らない。
+#   毎 render で実タブ名を読む（osascript 1 回 ≈ 30ms）。キャッシュ比較では
+#   Claude Code の上書きを検知できず復元しないため、この読み取りは省略できない（#49）。
+#   書き込みは差分がある時だけなので、定常時の追加コストは読み取り 1 回分。
 _iterm_id="$(turn_state_iterm_id "$session_id")"
 [ -z "$_iterm_id" ] && _iterm_id="${ITERM_SESSION_ID:-}"   # prefix 剥がし + サニタイズは lib 側の入口で行う
 # Claude Code 自身がタブ名（会話の要約）を管理しているため、置き換えず前置する。
