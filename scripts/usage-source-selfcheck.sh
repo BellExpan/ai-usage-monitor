@@ -144,11 +144,23 @@ _main() {
   native_events_24h=$(_int "$(printf '%s\n' "$native_out" | awk -F= '$1=="EVENTS_24H"{print $2; exit}')")
   cache_cdx_today=$(_int "$(_kv CDX_24H_TOKENS "$CACHE_PATH")")
 
-  if [ "$native_events_today" -gt 0 ] && [ "$cache_cdx_today" -eq 0 ]; then
+  # cache のトークン値が stale（取得失敗で前回値を保持した状態）なら、
+  # それは「昨日の today bucket」でありうる。today 基準の native と比較すると
+  # 必ず乖離し token_source_mismatch が誤発火する（PR #38 レビュー指摘）。
+  # stale は「計測が壊れている」ではなく「今回取れなかった」なので、
+  # トークン系の判定自体を skip する（rate limit 系の判定は継続）。
+  local cdx_tokens_stale
+  cdx_tokens_stale=$(_int "$(_kv CDX_TOKENS_STALE "$CACHE_PATH")")
+
+  if [ "$cdx_tokens_stale" = "1" ]; then
+    :  # stale の間はトークン突き合わせを行わない
+  elif [ "$native_events_today" -gt 0 ] && [ "$cache_cdx_today" -eq 0 ]; then
     _add_reason "codex_tokens_zero_despite_activity"
   fi
 
-  if { [ "$native_today" -eq 0 ] && [ "$cache_cdx_today" -gt 0 ]; } || \
+  if [ "$cdx_tokens_stale" = "1" ]; then
+    :  # 同上
+  elif { [ "$native_today" -eq 0 ] && [ "$cache_cdx_today" -gt 0 ]; } || \
      { [ "$native_today" -gt 0 ] && [ "$cache_cdx_today" -eq 0 ]; }; then
     _add_reason "token_source_mismatch"
   elif [ "$native_today" -gt 0 ] && [ "$cache_cdx_today" -gt 0 ]; then
@@ -178,7 +190,11 @@ _main() {
 
   cla_tokens=$(_int "$(_kv CLA_24H_TOKENS "$CACHE_PATH")")
   cla_activity=$(_int "$(_claude_activity_today)")
-  [ "$cla_activity" -gt 0 ] && [ "$cla_tokens" -eq 0 ] && _add_reason "claude_tokens_zero_despite_activity"
+  # Claude 側も対称に扱う: stale（前回値保持）なら「今日 0」ではないので判定しない
+  local cla_tokens_stale
+  cla_tokens_stale=$(_int "$(_kv CLA_TOKENS_STALE "$CACHE_PATH")")
+  [ "$cla_tokens_stale" != "1" ] && [ "$cla_activity" -gt 0 ] && [ "$cla_tokens" -eq 0 ] \
+    && _add_reason "claude_tokens_zero_despite_activity"
 
   _check_versions
 

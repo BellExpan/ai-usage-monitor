@@ -124,3 +124,42 @@ codex_line() {
   [ "$status" -eq 0 ]
   [ "$output" = "USAGE_SRC_HEALTH=unknown" ]
 }
+
+# --- PR #38 レビュー指摘（2回目）: stale token cache の誤警報防止 ---
+# cache のトークンが stale（取得失敗で前回値を保持した状態）のとき、それは
+# 「昨日の today bucket」でありうる。today 基準の native と比較すると必ず乖離し
+# token_source_mismatch が誤発火する。stale は「計測が壊れている」ではなく
+# 「今回取れなかった」なので、トークン突き合わせ自体を skip する。
+
+write_cache_stale() {
+  cat > "$CACHE" <<EOF
+CLA_OAUTH_FRESH=1
+CLA_24H_TOKENS=${1:-500}
+CDX_24H_TOKENS=${2:-0}
+CDX_TOKENS_STALE=${3:-1}
+EOF
+}
+
+@test "CDX_TOKENS_STALE=1 なら token_source_mismatch を出さない（値が大きく乖離していても）" {
+  write_cache_stale 500 999999999 1
+  codex_line 1200 1 > "$HOME/.codex/sessions/2026/07/28/stale.jsonl"
+  run bash "$SELF_CHECK" --cache "$CACHE"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"token_source_mismatch"* ]]
+}
+
+@test "CDX_TOKENS_STALE=1 なら codex_tokens_zero_despite_activity も出さない" {
+  write_cache_stale 500 0 1
+  codex_line 1200 1 > "$HOME/.codex/sessions/2026/07/28/stale0.jsonl"
+  run bash "$SELF_CHECK" --cache "$CACHE"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"codex_tokens_zero_despite_activity"* ]]
+}
+
+@test "CDX_TOKENS_STALE=0 なら従来通り検知する（skip が効きすぎない回帰防止）" {
+  write_cache_stale 500 0 0
+  codex_line 1200 1 > "$HOME/.codex/sessions/2026/07/28/fresh0.jsonl"
+  run bash "$SELF_CHECK" --cache "$CACHE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"codex_tokens_zero_despite_activity"* ]]
+}
