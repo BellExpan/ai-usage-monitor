@@ -66,6 +66,23 @@ TMP_FILE=$(mktemp -t ai_usage_cache.XXXXXX)
 
 export PATH="$HOME/.nvm/versions/node/$(ls "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -1)/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
+OLD_CACHE_EXISTS=0
+[ -f "$CACHE_FILE" ] && OLD_CACHE_EXISTS=1
+old_cache_value() {
+  local key="$1"
+  [ "$OLD_CACHE_EXISTS" = "1" ] || return 0
+  awk -F= -v k="$key" '$1 == k { print substr($0, length(k) + 2); exit }' "$CACHE_FILE" 2>/dev/null
+}
+old_or_current() {
+  local key="$1" current="$2" old
+  old=$(old_cache_value "$key")
+  if [ -n "$old" ]; then
+    printf '%s\n' "$old"
+  else
+    printf '%s\n' "$current"
+  fi
+}
+
 TODAY=$(LC_ALL=C date +%Y-%m-%d)
 SEVEN_AGO=$(LC_ALL=C date -v-6d +%Y-%m-%d)
 DOW=$(date +%u)
@@ -85,6 +102,9 @@ CLA_7D_RESETS_AT_ISO=""
 CLA_5H_RESETS_AT_EPOCH=0
 CLA_7D_RESETS_AT_EPOCH=0
 CLA_OAUTH_FRESH=0
+CLA_VALUES_STALE=0
+CLA_TOKENS_STALE=0
+CDX_TOKENS_STALE=0
 
 # Keychain から OAuth access token を取得（security コマンド経由）
 CLA_ACCESS_TOKEN=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null | python3 -c "
@@ -134,6 +154,22 @@ print(pct('five_hour'), epoch('five_hour'),
   CLA_OAUTH_FRESH=1
 fi
 
+if [ "$CLA_OAUTH_FRESH" != "1" ] && [ "$OLD_CACHE_EXISTS" = "1" ]; then
+  # 非 launchd の手動実行では Keychain/TCC/API の一時失敗が起きやすい。
+  # AI_USAGE_ALLOW_DEGRADED_WRITE=1 が無い限り、失敗値(100%)で既存の残量系を上書きしない。
+  if [ "${AI_USAGE_ALLOW_DEGRADED_WRITE:-0}" != "1" ]; then
+    CLA_5H_USED_PCT=$(old_or_current CLA_5H_USED_PCT "$CLA_5H_USED_PCT")
+    CLA_5H_REMAINING_PCT=$(old_or_current CLA_5H_REMAINING_PCT "$CLA_5H_REMAINING_PCT")
+    CLA_7D_USED_PCT=$(old_or_current CLA_7D_USED_PCT "$CLA_7D_USED_PCT")
+    CLA_7D_REMAINING_PCT=$(old_or_current CLA_7D_REMAINING_PCT "$CLA_7D_REMAINING_PCT")
+    CLA_7D_SONNET_USED_PCT=$(old_or_current CLA_7D_SONNET_USED_PCT "$CLA_7D_SONNET_USED_PCT")
+    CLA_7D_SONNET_REMAINING_PCT=$(old_or_current CLA_7D_SONNET_REMAINING_PCT "$CLA_7D_SONNET_REMAINING_PCT")
+    CLA_5H_RESETS_AT_EPOCH=$(old_or_current CLA_5H_RESETS_AT "$CLA_5H_RESETS_AT_EPOCH")
+    CLA_7D_RESETS_AT_EPOCH=$(old_or_current CLA_7D_RESETS_AT "$CLA_7D_RESETS_AT_EPOCH")
+    CLA_VALUES_STALE=1
+  fi
+fi
+
 # ── Claude ロールオーバー投影（Issue #18・Codex と対称）────────
 # Claude window は固定（7d=10080min / 5h=300min）。OAuth API に window_minutes は無いため定数。
 # resets_at が過去 = リセット済み → 次リセットへ巻き進め、使用量を fresh に投影。
@@ -160,6 +196,14 @@ fi
 # ccusage でトークン数とコストも取得（OAuth API にはない詳細）
 CLA_BLOCKS=$(npx -y ccusage@latest blocks --json --offline 2>/dev/null < /dev/null \
   || echo '{"blocks":[]}')
+CLA_BLOCKS_OK=$(echo "$CLA_BLOCKS" | python3 -c "
+import json, sys
+try:
+    d=json.load(sys.stdin)
+    print(1 if d.get('blocks') else 0)
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0)
 CLA_5H_TOKENS=$(echo "$CLA_BLOCKS" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
@@ -172,6 +216,11 @@ d=json.load(sys.stdin)
 active=[b for b in d.get('blocks',[]) if b.get('isActive')]
 print(active[-1].get('endTime','') if active else '')
 " 2>/dev/null || echo "")
+if [ "$CLA_BLOCKS_OK" != "1" ] && [ "$OLD_CACHE_EXISTS" = "1" ]; then
+  CLA_5H_TOKENS=$(old_or_current CLA_5H_TOKENS "$CLA_5H_TOKENS")
+  CLA_5H_RESET_AT=$(old_or_current CLA_5H_RESET_AT "$CLA_5H_RESET_AT")
+  CLA_TOKENS_STALE=1
+fi
 
 # 後方互換用: CLA_5H_REMAINING_MINS は OAuth % から逆算（近似）
 CLA_5H_REMAINING_MINS=$(awk "BEGIN{printf \"%d\", $CLA_5H_REMAINING_PCT*300/100}")
@@ -185,6 +234,14 @@ if [[ "$BILLING_WEEK_START" < "$CCUSAGE_SINCE" ]]; then
 fi
 CCUSAGE_DAILY_JSON=$(npx -y ccusage@latest daily --json --by-agent --since "$CCUSAGE_SINCE" --until "$TODAY" --offline 2>/dev/null < /dev/null \
   || echo '{"daily":[]}')
+CCUSAGE_DAILY_OK=$(echo "$CCUSAGE_DAILY_JSON" | python3 -c "
+import json, sys
+try:
+    d=json.load(sys.stdin)
+    print(1 if d.get('daily') else 0)
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0)
 
 CLA_24H_TOKENS=0 CLA_24H_COST=0 CLA_7D_TOKENS=0 CLA_7D_COST=0
 CDX_24H_TOKENS=0 CDX_24H_COST=0 CDX_WEEK_TOKENS=0 CDX_WEEK_COST=0
@@ -208,6 +265,19 @@ while IFS='=' read -r _key _value; do
     COST_RANGE) CDX_WEEK_COST=$_value ;;
   esac
 done <<< "$_cdx_usage_out"
+
+if [ "$CCUSAGE_DAILY_OK" != "1" ] && [ "$OLD_CACHE_EXISTS" = "1" ]; then
+  CLA_24H_TOKENS=$(old_or_current CLA_24H_TOKENS "$CLA_24H_TOKENS")
+  CLA_24H_COST=$(old_or_current CLA_24H_COST "$CLA_24H_COST")
+  CLA_7D_TOKENS=$(old_or_current CLA_7D_TOKENS "$CLA_7D_TOKENS")
+  CLA_7D_COST=$(old_or_current CLA_7D_COST "$CLA_7D_COST")
+  CDX_24H_TOKENS=$(old_or_current CDX_24H_TOKENS "$CDX_24H_TOKENS")
+  CDX_24H_COST=$(old_or_current CDX_24H_COST "$CDX_24H_COST")
+  CDX_WEEK_TOKENS=$(old_or_current CDX_WEEK_TOKENS "$CDX_WEEK_TOKENS")
+  CDX_WEEK_COST=$(old_or_current CDX_WEEK_COST "$CDX_WEEK_COST")
+  CLA_TOKENS_STALE=1
+  CDX_TOKENS_STALE=1
+fi
 
 # ── Codex 残量% — セッションJSONLの rate_limits から取得 ──
 # パーサは window_minutes で短期/週枠を分類し、primary/secondary の位置固定をしない。
@@ -312,6 +382,9 @@ fi
   echo "TIMESTAMP=$(date +%s)"
   echo "GENERATED_AT=$(date +'%Y-%m-%dT%H:%M:%S%z')"
   echo "CLA_OAUTH_FRESH=$CLA_OAUTH_FRESH"
+  echo "CLA_VALUES_STALE=$CLA_VALUES_STALE"
+  echo "CLA_TOKENS_STALE=$CLA_TOKENS_STALE"
+  echo "CDX_TOKENS_STALE=$CDX_TOKENS_STALE"
   echo "CLA_7D_HOURS_UNTIL_RESET=$CLA_7D_HOURS_UNTIL_RESET"
   echo "CLA_5H_USED_PCT=$CLA_5H_USED_PCT"
   echo "CLA_5H_REMAINING_PCT=$CLA_5H_REMAINING_PCT"
@@ -353,6 +426,13 @@ fi
   echo "CLA_PROJECTED_AT_RESET=$CLA_PROJECTED_AT_RESET"
   echo "CDX_UNDERUSE_WARN=$CDX_UNDERUSE_WARN"
 } > "$TMP_FILE"
+
+_health_line=$(bash "$(dirname "$0")/usage-source-selfcheck.sh" --cache "$TMP_FILE" --emit-cache-line 2>/dev/null || echo "USAGE_SRC_HEALTH=unknown")
+case "$_health_line" in
+  USAGE_SRC_HEALTH=*) : ;;
+  *) _health_line="USAGE_SRC_HEALTH=unknown" ;;
+esac
+printf '%s\n' "$_health_line" >> "$TMP_FILE"
 
 mv -f "$TMP_FILE" "$CACHE_FILE"
 chmod 600 "$CACHE_FILE"

@@ -428,6 +428,13 @@ export AI_USAGE_BASE_DIR=/tmp/test-sandbox
 bash scripts/cache-update.sh
 ```
 
+手動検証で本番 cache を壊さないため、`cache-update.sh` や selfcheck を直接実行するときは必ず隔離先を付ける。
+
+```bash
+AI_USAGE_BASE_DIR=/tmp/aum-test bash scripts/cache-update.sh
+AI_USAGE_BASE_DIR=/tmp/aum-test bash scripts/usage-source-selfcheck.sh
+```
+
 ---
 
 ## テスト
@@ -466,6 +473,8 @@ ai-usage-monitor/
 │   │   ├── bg-status.sh   # バックグラウンド進捗の状態関数（set/clear/render）
 │   │   └── parse_codex_rate_limits.py  # Codex rate_limits パーサ（null マーカー skip・残量と resets_at 抽出）
 │   ├── cache-update.sh           # キャッシュを5分ごと更新（launchd から呼ばれる）
+│   ├── usage-source-selfcheck.sh # 外部データ源の契約ドリフト検知
+│   ├── usage-selfcheck-notify.sh # selfcheck の日次通知 wrapper
 │   ├── statusline.sh             # Claude Code statusline（stdin JSON + キャッシュ）
 │   ├── bg-status.sh              # 任意ジョブの進捗 set/clear CLI（⏳ 表示）
 │   ├── ai-org-progress.sh        # subagent / bg ジョブの進捗 pin CLI（write/complete/reap・🔧/⚙ 表示）
@@ -484,6 +493,7 @@ ai-usage-monitor/
 │   └── hooks/test_enforce_subagent_progress.bats
 ├── launchd/
 │   ├── com.aiorg.usage-monitor.plist     # 使用量キャッシュ更新ジョブ（5分毎）
+│   ├── com.aiorg.usage-selfcheck.plist   # データ源 selfcheck（日次）
 │   └── com.ai-org.subagent-watch.plist   # subagent watch ジョブ（10秒毎）
 └── docs/
     ├── index.html  # 整形済みドキュメント（GitHub Pages 版）

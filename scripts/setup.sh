@@ -6,6 +6,9 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PLIST_NAME="com.aiorg.usage-monitor"
 PLIST_SRC="$REPO_DIR/launchd/$PLIST_NAME.plist"
 PLIST_DST="$HOME/Library/LaunchAgents/$PLIST_NAME.plist"
+SELFCHECK_PLIST_NAME="com.aiorg.usage-selfcheck"
+SELFCHECK_PLIST_SRC="$REPO_DIR/launchd/$SELFCHECK_PLIST_NAME.plist"
+SELFCHECK_PLIST_DST="$HOME/Library/LaunchAgents/$SELFCHECK_PLIST_NAME.plist"
 SWIFTBAR_PLUGIN_DIR="${SWIFTBAR_PLUGIN_DIR:-$HOME/Library/Application Support/SwiftBar/Plugins}"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 
@@ -16,6 +19,8 @@ echo "=== AI Usage Monitor セットアップ ==="
 
 # 1. キャッシュ更新スクリプトに実行権限
 chmod +x "$REPO_DIR/scripts/cache-update.sh"
+chmod +x "$REPO_DIR/scripts/usage-source-selfcheck.sh"
+chmod +x "$REPO_DIR/scripts/usage-selfcheck-notify.sh"
 chmod +x "$REPO_DIR/swiftbar/ai_usage.5m.sh"
 chmod +x "$REPO_DIR/hooks/session-start.sh"
 echo "✓ 実行権限付与"
@@ -46,6 +51,25 @@ _health=$(aum_verify_health) || {
   exit 1
 }
 echo "✓ launchd 登録済み (5分ごと自動更新・health=$_health)"
+
+# 2a. usage-source selfcheck（日次監査 + 通知）
+aum_render_plist "$SELFCHECK_PLIST_SRC" "$REPO_DIR" "$HOME" "$SELFCHECK_PLIST_DST" || {
+  echo "✗ selfcheck plist render に失敗（$SELFCHECK_PLIST_SRC → $SELFCHECK_PLIST_DST）" >&2; exit 1; }
+if command -v plutil >/dev/null 2>&1; then
+  plutil -lint "$SELFCHECK_PLIST_DST" >/dev/null 2>&1 || {
+    echo "✗ selfcheck plist lint に失敗: $SELFCHECK_PLIST_DST" >&2; exit 1; }
+fi
+/bin/launchctl bootout "gui/$(id -u)/$SELFCHECK_PLIST_NAME" 2>/dev/null || true
+/bin/launchctl bootout "gui/$(id -u)" "$SELFCHECK_PLIST_DST" 2>/dev/null || true
+/bin/launchctl bootstrap "gui/$(id -u)" "$SELFCHECK_PLIST_DST" || {
+  echo "✗ selfcheck launchd deploy に失敗（$SELFCHECK_PLIST_DST）" >&2; exit 1; }
+/bin/launchctl kickstart -k "gui/$(id -u)/$SELFCHECK_PLIST_NAME" 2>/dev/null || true
+if /bin/launchctl print "gui/$(id -u)/$SELFCHECK_PLIST_NAME" >/dev/null 2>&1; then
+  echo "✓ selfcheck launchd 登録済み (1日1回監査)"
+else
+  echo "✗ selfcheck launchd 登録確認に失敗" >&2
+  exit 1
+fi
 
 # 2b. 旧監視の孤児 launchd を撤去（Issue #24）
 #     com.ai-org.usage-cache は旧版 ai-org 監視の残骸で、現行 status line が読まない

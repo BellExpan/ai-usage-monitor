@@ -52,6 +52,7 @@ _claude_seg() {
   cat > "$CACHE" <<EOF
 TIMESTAMP=$NOW
 CLA_OAUTH_FRESH=1
+CDX_RATE_LIMITS_FRESH=1
 CLA_5H_REMAINING_PCT=99
 CLA_7D_REMAINING_PCT=88
 CLA_7D_SONNET_REMAINING_PCT=99
@@ -62,4 +63,39 @@ EOF
   [[ "$output" == *"5h99%"* ]]
   [[ "$output" == *"1w88%"* ]]
   [[ "$output" == *"Snt1w99%"* ]]
+}
+
+@test "USAGE_SRC_HEALTH degraded -> statusline に ⚠src が出る" {
+  cat > "$CACHE" <<EOF
+TIMESTAMP=$NOW
+CLA_OAUTH_FRESH=1
+CDX_RATE_LIMITS_FRESH=1
+CLA_5H_REMAINING_PCT=99
+CLA_7D_REMAINING_PCT=88
+CLA_7D_SONNET_REMAINING_PCT=77
+CDX_5H_REMAINING_PCT=66
+CDX_WEEK_REMAINING_PCT=55
+USAGE_SRC_HEALTH=degraded:token_source_mismatch
+ROUTING_MODE=normal
+EOF
+  run bash -c "echo '$_STDIN' | AI_USAGE_BASE_DIR='$AI_USAGE_BASE_DIR' bash '$STATUSLINE' 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'"
+  [[ "$output" == *"⚠src"* ]]
+}
+
+@test "CLA_OAUTH_FRESH=0 -> 5h? 表示になり 100% にならない" {
+  cat > "$CACHE" <<EOF
+TIMESTAMP=$NOW
+CLA_OAUTH_FRESH=0
+CDX_RATE_LIMITS_FRESH=1
+CLA_5H_REMAINING_PCT=100
+CLA_7D_REMAINING_PCT=100
+CLA_7D_SONNET_REMAINING_PCT=100
+CDX_5H_REMAINING_PCT=66
+CDX_WEEK_REMAINING_PCT=55
+ROUTING_MODE=normal
+EOF
+  run _claude_seg
+  [[ "$output" == *"5h?"* ]]
+  [[ "$output" == *"1w?"* ]]
+  [[ "$output" != *"100%"* ]]
 }
