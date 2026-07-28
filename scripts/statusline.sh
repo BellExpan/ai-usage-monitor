@@ -18,6 +18,8 @@ source "$_SCRIPT_DIR/lib/cache-path.sh"
 source "$_SCRIPT_DIR/lib/bg-status.sh"
 # shellcheck source=lib/reset-label.sh
 source "$_SCRIPT_DIR/lib/reset-label.sh"
+# shellcheck source=lib/session-state.sh
+source "$_SCRIPT_DIR/lib/session-state.sh"
 unset _SCRIPT_DIR
 
 # ── stdin JSON（Claude Code が渡す）──────────────────────────
@@ -27,6 +29,7 @@ model_short=""
 ctx_used=""
 ctx_size=0
 cwd=""
+session_id=""
 
 if [ ! -t 0 ]; then
   STDIN_DATA=$(cat)
@@ -49,11 +52,12 @@ try:
         str(cw.get('used_percentage', '')),
         str(cw.get('context_window_size', 0)),
         cwd,
+        str(d.get('session_id', '')),
     ]))
 except Exception:
-    print('|||||')
+    print('||||||')
 " 2>/dev/null)
-    IFS='|' read -r CLA_5H_USED CLA_WEEK_USED model_raw ctx_used ctx_size cwd <<< "$parsed"
+    IFS='|' read -r CLA_5H_USED CLA_WEEK_USED model_raw ctx_used ctx_size cwd session_id <<< "$parsed"
     [ -n "$CLA_5H_USED" ] && \
       CLA_5H_REMAINING_PCT=$(awk "BEGIN{printf \"%d\", 100-$CLA_5H_USED}")
     [ -n "$CLA_WEEK_USED" ] && \
@@ -285,7 +289,22 @@ bash_rows=""
 bash_count=0
 _ESC=$(printf '\033')
 _AGENT_ID_MINLEN=14   # agent .output は ~17文字 hex、bash bg は ~9文字。14 で分離
-_out_dir="/private/tmp/claude-$(id -u)"
+# Issue #42: 自セッションの tasks だけを見る（他 terminal の bg を混ぜない）。
+#   session_id が取れない旧環境では従来どおり全体を見る（fail-open）。
+_out_dir="$(session_tasks_dir "$session_id")"
+_out_scoped=1
+if [ -z "$_out_dir" ]; then
+  _out_dir="/private/tmp/claude-$(id -u)"
+  _out_scoped=0
+fi
+# bash 3.2 互換のため配列を使わず分岐（set -u 下の空配列展開を避ける）
+_find_outputs() {
+  if [ "$_out_scoped" = "1" ]; then
+    find "$_out_dir" -maxdepth 1 -name "*.output" -mmin -5 -exec stat -f '%m %N' {} \; 2>/dev/null
+  else
+    find "$_out_dir" -name "*.output" -mmin -5 -exec stat -f '%m %N' {} \; 2>/dev/null
+  fi
+}
 if [ -d "$_out_dir" ]; then
   while IFS= read -r _of; do
     [ -n "$_of" ] || continue
@@ -302,7 +321,7 @@ if [ -d "$_out_dir" ]; then
       bash_rows="${bash_rows}"$'\n'"   ${dim}⚙ ${_bid} $(_bg_age $((now_epoch - _mt))) (no output yet)${reset}"
     fi
     bash_count=$((bash_count + 1))
-  done < <(find "$_out_dir" -name "*.output" -mmin -5 -exec stat -f '%m %N' {} \; 2>/dev/null | sort -rn | cut -d' ' -f2-)
+  done < <(_find_outputs | sort -rn | cut -d' ' -f2-)
 fi
 
 # (c) /tmp/ci_ プロセス
@@ -315,10 +334,29 @@ while IFS= read -r _pid; do
 done < <(pgrep -f "/tmp/ci_" 2>/dev/null)
 
 bg_total=$((prog_count + bash_count + ci_count))
+
+# Issue #42: ターン状態バナー。「終わったのか / bg で動いているのか」を先頭で言い切る。
+#   判定に使うのは bash_count（＝自セッションの bg タスク）。prog/ci は元からマシン全体スコープ。
+_turn_state="$(turn_state_read "$session_id")"
+_banner="$(turn_banner "$_turn_state" "$bash_count")"
+line3=""
+case "$_turn_state" in
+  idle) if [ "$bash_count" -gt 0 ]; then line3="${cyan}${_banner}${reset}  "
+        else line3="${green}${_banner}${reset}  "; fi ;;
+  busy) line3="${yellow}${_banner}${reset}  " ;;
+  wait) line3="${red}${_banner}${reset}  " ;;
+esac
+
 if [ "$bg_total" -gt 0 ]; then
-  line3="${yellow}⚡${bg_total} bg${reset}"
+  line3="${line3}${yellow}⚡${bg_total} bg${reset}"
 else
-  line3="${dim}⚡0 bg${reset}"
+  line3="${line3}${dim}⚡0 bg${reset}"
+fi
+
+# 他 terminal の bg は消さずに別枠で見せる（存在は分かるが自分のと混同しない）
+_other_bg="$(session_other_bg_count "$session_id")"
+if [ "${_other_bg:-0}" -gt 0 ]; then
+  line3="${line3} ${dim}+${_other_bg} 他term${reset}"
 fi
 
 # Background job progress message (#44) — 状態ファイルが新鮮なら表示
@@ -366,3 +404,13 @@ fi
 line3="${line3}${bash_rows}${ci_rows}"
 
 [ -n "$line3" ] && printf "%b\n" "$line3"
+
+# Issue #42: iTerm2 のタブタイトルを同じ状態に同期する。
+#   タブバーを見るだけで（terminal をフォーカスせずに）どのタブが終わっているか判別できる。
+#   変化時のみ osascript を呼ぶので、通常の refresh には追加コストが乗らない。
+_iterm_id="$(turn_state_iterm_id "$session_id")"
+[ -z "$_iterm_id" ] && _iterm_id="${ITERM_SESSION_ID##*:}"
+if [ -n "$_iterm_id" ] && [ "$_turn_state" != "unknown" ]; then
+  iterm_set_title_if_changed \
+    "$(session_title "$_turn_state" "$bash_count" "${cwd##*/}")" "$_iterm_id"
+fi

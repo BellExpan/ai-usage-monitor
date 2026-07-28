@@ -169,6 +169,41 @@ else:
 PYEOF
 fi
 
+# 4c. Issue #42: ターン状態 hook
+#     statusline の ✅完了 / 🔵bg / ⏳実行中 / 🔴要操作 と iTerm2 タブタイトルの単一情報源。
+#     複数 terminal 運用で「このタブは終わったのか」を判別可能にする。
+install -m 0755 "$REPO_DIR/hooks/turn-state.sh" "$HOOKS_DST/claude_turn_state.sh"
+echo "✓ claude_turn_state hook を同期"
+
+if command -v python3 >/dev/null && [ -f "$CLAUDE_SETTINGS" ]; then
+  python3 - "$CLAUDE_SETTINGS" "$HOOKS_DST/claude_turn_state.sh" <<'PYEOF'
+import json, sys
+settings_path, hook = sys.argv[1], sys.argv[2]
+with open(settings_path) as f:
+    d = json.load(f)
+hooks = d.setdefault("hooks", {})
+# PreToolUse も張るのは、bg タスク完了で Claude が再開した時に ⏳ へ戻すため。
+# hook 側が「同じ状態なら書かない」ので、通常のツール呼び出しに実コストは乗らない。
+WIRING = [("UserPromptSubmit", "busy"), ("PreToolUse", "busy"),
+          ("Notification", "wait"), ("Stop", "idle")]
+changed = False
+for event, arg in WIRING:
+    cmd = f"bash {hook} {arg}"
+    arr = hooks.setdefault(event, [])
+    if any((h.get("command") or "") == cmd
+           for group in arr for h in group.get("hooks", [])):
+        continue
+    arr.append({"hooks": [{"type": "command", "command": cmd}]})
+    changed = True
+if changed:
+    with open(settings_path, "w") as f:
+        json.dump(d, f, indent=2, ensure_ascii=False)
+    print("✓ ターン状態 hook を登録 (UserPromptSubmit/PreToolUse/Notification/Stop)")
+else:
+    print("✓ ターン状態 hook は既に登録済み")
+PYEOF
+fi
+
 # 5. 旧パス移行（$DARWIN_USER_TEMP_DIR 配下に移行）
 # shellcheck source=lib/cache-path.sh
 source "$REPO_DIR/scripts/lib/cache-path.sh"
