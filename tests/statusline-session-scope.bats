@@ -173,6 +173,13 @@ _age_out() {  # _age_out <file> <minutes-ago>
   [ "$output" = "⠐ CrispPage v1 出荷準備" ]
 }
 
+@test "strip_job_suffix has a known limitation: a short trailing (token) is also stripped" {
+  # iTerm2 は job 名を単独取得できないため形で判定するしかなく、
+  # "(v2)" のような会話タイトル末尾も剥がれる。表示上その token が消えるのみ（既知・許容）。
+  run strip_job_suffix "SnoreReel (v2)"
+  [ "$output" = "SnoreReel" ]
+}
+
 @test "strip_job_suffix keeps parenthesised text that is not a job suffix" {
   run strip_job_suffix "CrispPage (v1 出荷)"
   [ "$output" = "CrispPage (v1 出荷)" ]

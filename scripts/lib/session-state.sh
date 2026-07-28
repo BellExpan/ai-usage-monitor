@@ -140,6 +140,11 @@ strip_state_prefix() {
 
 # strip_job_suffix <name> → iTerm が表示時に付ける末尾 " (job名)" を除去
 #   name を読んで書き戻す際、これを消さないと "(caffeinate) (caffeinate)" と多重化する。
+#   既知の限界: iTerm2 AppleScript は job 名を単独取得できない（`job name` は存在しない）ため、
+#   「空白なしの括弧トークンが末尾にある」という形で判定するしかない。
+#   その結果、会話タイトルが "(v2)" のような短い括弧で終わる場合も剥がれる。
+#   影響はタブ表示上その token が消えるだけ（会話・データには無影響）で、
+#   剥がさない実装は (caffeinate) が無限に積み上がるためこちらが害が小さい。
 strip_job_suffix() {
   printf '%s' "${1:-}" | sed -E 's/[[:space:]]+\([A-Za-z0-9_.:-]+\)$//'
 }
