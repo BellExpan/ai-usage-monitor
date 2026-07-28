@@ -353,10 +353,14 @@ else
   line3="${line3}${dim}⚡0 bg${reset}"
 fi
 
-# 他 terminal の bg は消さずに別枠で見せる（存在は分かるが自分のと混同しない）
-_other_bg="$(session_other_bg_count "$session_id")"
-if [ "${_other_bg:-0}" -gt 0 ]; then
-  line3="${line3} ${dim}+${_other_bg} 他term${reset}"
+# 他 terminal の bg は消さずに別枠で見せる（存在は分かるが自分のと混同しない）。
+#   ただし session スコープが効いていない degrade 経路では「自分の分」を差し引けず、
+#   ⚡N と同じファイルを +N 他term として二重に見せてしまうため出さない。
+if [ "$_out_scoped" = "1" ]; then
+  _other_bg="$(session_other_bg_count "$session_id")"
+  if [ "${_other_bg:-0}" -gt 0 ]; then
+    line3="${line3} ${dim}+${_other_bg} 他term${reset}"
+  fi
 fi
 
 # Background job progress message (#44) — 状態ファイルが新鮮なら表示

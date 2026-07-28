@@ -85,6 +85,17 @@ _run_statusline() {
   [[ "$output" != *"⏳ 実行中"* ]]
 }
 
+@test "E2E: without a session id, other-terminal bg is not double counted" {
+  # degrade 経路では自分の分を差し引けないため「+N 他term」を出さない
+  # （出すと ⚡N と同じファイルを二重に見せることになる）
+  _set_turn idle
+  _other_bg b901
+  run bash -c "printf '%s' '{\"workspace\":{\"current_dir\":\"/tmp/ai-org\"}}' \
+    | bash '$REPO_ROOT/scripts/statusline.sh' 2>/dev/null | sed \$'s/\033\\[[0-9;]*m//g'"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"他term"* ]]
+}
+
 @test "E2E: no session_id in the payload → still renders (fail-open)" {
   run bash -c "printf '%s' '{\"model\":{\"display_name\":\"Opus 5\"}}' | bash '$REPO_ROOT/scripts/statusline.sh' 2>/dev/null"
   [ "$status" -eq 0 ]
