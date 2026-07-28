@@ -55,7 +55,7 @@ _is_stale() {
 @test "same live process (matching start) is NOT stale regardless of time" {
   mkdir "$LOCK_DIR"
   echo $$ > "$LOCK_DIR/pid"
-  ps -o lstart= -p $$ > "$LOCK_DIR/start"
+  ps -o lstart= -p $$ > "$LOCK_DIR/start" 2>/dev/null || skip "ps unavailable in this sandbox"
   run _is_stale
   [ "$status" -ne 0 ]            # not stale
 }

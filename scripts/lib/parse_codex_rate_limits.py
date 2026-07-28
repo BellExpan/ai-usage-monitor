@@ -1,32 +1,152 @@
 #!/usr/bin/env python3
-"""Codex rate_limits パーサ（Issue #7）。
+"""Codex rate_limits parser.
 
-~/.codex/sessions/**/*.jsonl の最新 token_count イベントから
-5h(primary)/週(secondary) 枠の使用率・残量・リセット epoch を抽出する。
+Reads the newest usable token_count event from ~/.codex/sessions/**/*.jsonl and
+prints KEY=VALUE lines for short-term and weekly Codex rate-limit windows.
 
-出力(stdout, スペース区切り 9 値):
-  p5_used p5_remaining p5_resets_at wk_used wk_remaining wk_resets_at fresh \
-  p5_window_minutes wk_window_minutes
+Codex changed the rate_limits shape around 2026-07-12: the weekly window moved
+from secondary to primary and secondary became null. The parser therefore does
+not assume primary=5h and secondary=week. It collects every dict-valued
+rate_limits entry with used_percent, then classifies by window_minutes:
 
-window_minutes は resets_at が過去になった時の「次リセット」ロールフォワード投影に使う
-（Issue #18: Codex 未使用で fresh データが来ないと resets_at が過去固定 → ↺soon 永久固定を解消）。
-欠落イベントでは 0（= window 不明 → 投影しない安全側）を出す。
+  * 0 < window_minutes < 1440: short window (5h-style)
+  * window_minutes >= 1440: long window (weekly-style)
 
-設計判断（クラッシュ防止の要）:
-  Codex は週枠枯渇時に `limit_id=premium` / `primary=null` / `secondary=null`
-  の credits 切替マーカーイベントを emit する。このイベントは window 情報を
-  持たないため、5h/週枠の表示には使えない。
-  primary か secondary のどちらかが非 null の「有効な」rate_limits のみを採用し、
-  null マーカーはスキップする。これを怠ると pri.get() で AttributeError となり、
-  呼び出し側がデフォルト（残100% / RESETS_AT=0）にフォールバックして
-  「枯渇中の Codex を残100% / ↺非表示」と誤表示する。
+If multiple candidates exist, the shortest short window and longest long window
+are selected. Entries with missing/zero window_minutes are classification
+unknown and do not populate either window.
+
+Output keys are stable KEY=VALUE lines so callers can ignore future additions:
+
+  P5_AVAILABLE P5_USED_PCT P5_REMAINING_PCT P5_RESETS_AT P5_WINDOW_MIN
+  WK_AVAILABLE WK_USED_PCT WK_REMAINING_PCT WK_RESETS_AT WK_WINDOW_MIN
+  FRESH SCHEMA
+
+Broken JSONL lines are skipped line-by-line. Events with no usable frame entry
+are skipped, generalizing the old primary=null/secondary=null marker defense.
+Remaining percentages are clamped to [0, 100]. Freshness uses aware datetime
+epoch conversion to avoid timezone-boundary drift.
 """
+
 import datetime
 import glob
 import json
 import os
 import sys
 import time
+
+
+def _frame_candidates(rate_limits):
+    if not isinstance(rate_limits, dict):
+        return []
+
+    out = []
+    for name, value in rate_limits.items():
+        if not isinstance(value, dict) or "used_percent" not in value:
+            continue
+        try:
+            used = float(value.get("used_percent", 0) or 0)
+        except (TypeError, ValueError):
+            used = 0.0
+        try:
+            window = int(value.get("window_minutes", 0) or 0)
+        except (TypeError, ValueError):
+            window = 0
+        try:
+            resets_at = int(value.get("resets_at", 0) or 0)
+        except (TypeError, ValueError):
+            resets_at = 0
+        out.append(
+            {
+                "name": name,
+                "used_percent": used,
+                "window_minutes": window,
+                "resets_at": resets_at,
+            }
+        )
+    return out
+
+
+def _remaining(used):
+    return round(max(0.0, min(100.0, 100.0 - used)), 1)
+
+
+def _window_output(prefix, frame):
+    if not frame:
+        return {
+            f"{prefix}_AVAILABLE": "0",
+            f"{prefix}_USED_PCT": "0",
+            f"{prefix}_REMAINING_PCT": "100",
+            f"{prefix}_RESETS_AT": "0",
+            f"{prefix}_WINDOW_MIN": "0",
+        }
+
+    used = frame["used_percent"]
+    return {
+        f"{prefix}_AVAILABLE": "1",
+        f"{prefix}_USED_PCT": str(used),
+        f"{prefix}_REMAINING_PCT": f"{_remaining(used):.1f}",
+        f"{prefix}_RESETS_AT": str(frame["resets_at"]),
+        f"{prefix}_WINDOW_MIN": str(frame["window_minutes"]),
+    }
+
+
+def _classify(frames):
+    short_candidates = [f for f in frames if 0 < f["window_minutes"] < 1440]
+    long_candidates = [f for f in frames if f["window_minutes"] >= 1440]
+
+    short = min(short_candidates, key=lambda f: f["window_minutes"], default=None)
+    long = max(long_candidates, key=lambda f: f["window_minutes"], default=None)
+    return short, long
+
+
+def _schema(short, long):
+    if short and long:
+        return "legacy_5h_week"
+    if long:
+        return "week_only"
+    if short:
+        return "short_only"
+    return "none"
+
+
+def _fresh(timestamp):
+    if not timestamp:
+        return 0
+    try:
+        epoch = datetime.datetime.fromisoformat(
+            timestamp.replace("Z", "+00:00")
+        ).timestamp()
+        return 1 if (time.time() - epoch) < 86400 else 0
+    except Exception:
+        return 0
+
+
+def _defaults():
+    out = {}
+    out.update(_window_output("P5", None))
+    out.update(_window_output("WK", None))
+    out["FRESH"] = "0"
+    out["SCHEMA"] = "none"
+    return out
+
+
+def _print(out):
+    for key in (
+        "P5_AVAILABLE",
+        "P5_USED_PCT",
+        "P5_REMAINING_PCT",
+        "P5_RESETS_AT",
+        "P5_WINDOW_MIN",
+        "WK_AVAILABLE",
+        "WK_USED_PCT",
+        "WK_REMAINING_PCT",
+        "WK_RESETS_AT",
+        "WK_WINDOW_MIN",
+        "FRESH",
+        "SCHEMA",
+    ):
+        print(f"{key}={out[key]}")
 
 
 def main():
@@ -39,8 +159,8 @@ def main():
         glob.glob(os.path.join(sessions_dir, "**", "*.jsonl"), recursive=True)
     )
 
-    rate_limits = None
-    ts = ""
+    selected_frames = None
+    selected_ts = ""
     for f in reversed(files):
         try:
             fp = open(f)
@@ -48,61 +168,36 @@ def main():
             continue
         with fp:
             for line in fp:
-                # 壊れ行・書き込み途中のトランケート末尾行は「その行だけ」
-                # スキップする。try をファイル全体に掛けると、有効イベントより
-                # 前に1行でも壊れ行があるとファイル丸ごと捨てて
-                # デフォルト（残100%）にフォールバックし、本修正が直す
-                # 「枯渇を残100%」バグを別経路で再発させる（RI-1）。
                 try:
                     d = json.loads(line)
                 except (ValueError, TypeError):
                     continue
                 if not isinstance(d, dict) or d.get("type") != "event_msg":
                     continue
-                p = d.get("payload", {})
-                if p.get("type") == "token_count" and "rate_limits" in p:
-                    rl = p["rate_limits"]
-                    # primary/secondary が両方 null のイベント
-                    # （premium 切替・週枯渇マーカー）は window 情報なし
-                    # → スキップし、直近の有効な rate_limits を採用する
-                    if rl and (rl.get("primary") or rl.get("secondary")):
-                        rate_limits = rl
-                        ts = d.get("timestamp", "")
-        if rate_limits:
+                payload = d.get("payload", {})
+                if not isinstance(payload, dict):
+                    continue
+                if payload.get("type") != "token_count" or "rate_limits" not in payload:
+                    continue
+                frames = _frame_candidates(payload.get("rate_limits"))
+                if frames:
+                    selected_frames = frames
+                    selected_ts = d.get("timestamp", "")
+        if selected_frames:
             break
 
-    if not rate_limits:
-        print("0 100 0 0 100 0 0 0 0")
+    if not selected_frames:
+        _print(_defaults())
         return
 
-    pri = rate_limits.get("primary") or {}
-    sec = rate_limits.get("secondary") or {}
-    p5u = float(pri.get("used_percent", 0))
-    wku = float(sec.get("used_percent", 0))
-    # 残量は [0,100] にクランプ（異常値で負/超過残量が下流の閾値比較を
-    # 誤らせるのを防ぐ・RI-3）
-    p5r = round(max(0.0, min(100.0, 100 - p5u)), 1)
-    wkr = round(max(0.0, min(100.0, 100 - wku)), 1)
-    p5at = int(pri.get("resets_at", 0))
-    wkat = int(sec.get("resets_at", 0))
-    # window_minutes（5h=300 / 週=10080）。欠落時は 0 = 投影しない安全側（#18）。
-    p5win = int(pri.get("window_minutes", 0) or 0)
-    wkwin = int(sec.get("window_minutes", 0) or 0)
+    short, long = _classify(selected_frames)
 
-    # 24h 以内のデータか。aware datetime の .timestamp() で正しい epoch を得る
-    # （旧 mktime(timetuple()) は naive 解釈で TZ オフセット分ズレ境界判定が
-    # 反転しうる・RI-2）
-    fresh = 0
-    if ts:
-        try:
-            epoch = datetime.datetime.fromisoformat(
-                ts.replace("Z", "+00:00")
-            ).timestamp()
-            fresh = 1 if (time.time() - epoch) < 86400 else 0
-        except Exception:
-            fresh = 0
-
-    print(p5u, p5r, p5at, wku, wkr, wkat, fresh, p5win, wkwin)
+    out = {}
+    out.update(_window_output("P5", short))
+    out.update(_window_output("WK", long))
+    out["FRESH"] = str(_fresh(selected_ts))
+    out["SCHEMA"] = _schema(short, long)
+    _print(out)
 
 
 if __name__ == "__main__":

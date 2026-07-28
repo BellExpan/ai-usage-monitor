@@ -67,9 +67,7 @@ TMP_FILE=$(mktemp -t ai_usage_cache.XXXXXX)
 export PATH="$HOME/.nvm/versions/node/$(ls "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -1)/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 TODAY=$(LC_ALL=C date +%Y-%m-%d)
-TODAY_NUM=$(LC_ALL=C date +%Y%m%d)
-SEVEN_AGO_NUM=$(LC_ALL=C date -v-6d +%Y%m%d)
-TODAY_CODEX_FMT=$(LC_ALL=C date +'%b %d, %Y')
+SEVEN_AGO=$(LC_ALL=C date -v-6d +%Y-%m-%d)
 DOW=$(date +%u)
 BILLING_WEEK_START=$(LC_ALL=C date -v-$(( DOW - 1 ))d +%Y-%m-%d)
 # CDX_DAYS_UNTIL_RESET / CDX_HOURS_UNTIL_RESET は epoch ベースで後段に計算（DOW計算は廃止）
@@ -84,6 +82,8 @@ CLA_7D_SONNET_USED_PCT=0
 CLA_7D_SONNET_REMAINING_PCT=100
 CLA_5H_RESETS_AT_ISO=""
 CLA_7D_RESETS_AT_ISO=""
+CLA_5H_RESETS_AT_EPOCH=0
+CLA_7D_RESETS_AT_EPOCH=0
 CLA_OAUTH_FRESH=0
 
 # Keychain から OAuth access token を取得（security コマンド経由）
@@ -176,66 +176,89 @@ print(active[-1].get('endTime','') if active else '')
 # 後方互換用: CLA_5H_REMAINING_MINS は OAuth % から逆算（近似）
 CLA_5H_REMAINING_MINS=$(awk "BEGIN{printf \"%d\", $CLA_5H_REMAINING_PCT*300/100}")
 
-# ── Claude 7d ─────────────────────────────────────────────
-CLA_JSON=$(npx -y ccusage@latest daily --json --since "$SEVEN_AGO_NUM" --until "$TODAY_NUM" --offline 2>/dev/null < /dev/null \
+# ── ccusage daily（Claude/Codex tokens & cost）───────────────
+# 統合 ccusage はデフォルトで Claude+Codex 合算(agent: all)を返すため、--by-agent の
+# agents[] から明示的に分離する。daily は 1 回だけ呼び、必要な期間差は parser 側で絞る。
+CCUSAGE_SINCE="$SEVEN_AGO"
+if [[ "$BILLING_WEEK_START" < "$CCUSAGE_SINCE" ]]; then
+  CCUSAGE_SINCE="$BILLING_WEEK_START"
+fi
+CCUSAGE_DAILY_JSON=$(npx -y ccusage@latest daily --json --by-agent --since "$CCUSAGE_SINCE" --until "$TODAY" --offline 2>/dev/null < /dev/null \
   || echo '{"daily":[]}')
-CLA_7D_TOKENS=$(echo "$CLA_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(sum(x.get('totalTokens',0) for x in d.get('daily',[])))")
-CLA_7D_COST=$(echo "$CLA_JSON"   | python3 -c "import json,sys; d=json.load(sys.stdin); print(sum(x.get('totalCost',0)   for x in d.get('daily',[])))")
-CLA_24H_TOKENS=$(echo "$CLA_JSON" | python3 -c "
-import json,sys; d=json.load(sys.stdin)
-rows=[x for x in d.get('daily',[]) if x.get('date','')=='$TODAY']
-print(rows[0].get('totalTokens',0) if rows else 0)")
-CLA_24H_COST=$(echo "$CLA_JSON" | python3 -c "
-import json,sys; d=json.load(sys.stdin)
-rows=[x for x in d.get('daily',[]) if x.get('date','')=='$TODAY']
-print(rows[0].get('totalCost',0) if rows else 0)")
+
+CLA_24H_TOKENS=0 CLA_24H_COST=0 CLA_7D_TOKENS=0 CLA_7D_COST=0
+CDX_24H_TOKENS=0 CDX_24H_COST=0 CDX_WEEK_TOKENS=0 CDX_WEEK_COST=0
+
+_cla_usage_out=$(echo "$CCUSAGE_DAILY_JSON" | python3 "$(dirname "$0")/lib/parse_ccusage_daily.py" --agent claude --today "$TODAY" --since "$SEVEN_AGO" 2>/dev/null) || true
+while IFS='=' read -r _key _value; do
+  case "$_key" in
+    TOKENS_24H) CLA_24H_TOKENS=$_value ;;
+    COST_24H) CLA_24H_COST=$_value ;;
+    TOKENS_RANGE) CLA_7D_TOKENS=$_value ;;
+    COST_RANGE) CLA_7D_COST=$_value ;;
+  esac
+done <<< "$_cla_usage_out"
+
+_cdx_usage_out=$(echo "$CCUSAGE_DAILY_JSON" | python3 "$(dirname "$0")/lib/parse_ccusage_daily.py" --agent codex --today "$TODAY" --since "$BILLING_WEEK_START" 2>/dev/null) || true
+while IFS='=' read -r _key _value; do
+  case "$_key" in
+    TOKENS_24H) CDX_24H_TOKENS=$_value ;;
+    COST_24H) CDX_24H_COST=$_value ;;
+    TOKENS_RANGE) CDX_WEEK_TOKENS=$_value ;;
+    COST_RANGE) CDX_WEEK_COST=$_value ;;
+  esac
+done <<< "$_cdx_usage_out"
 
 # ── Codex 残量% — セッションJSONLの rate_limits から取得 ──
-# パーサは scripts/lib/parse_codex_rate_limits.py に分離（テスト可能化・Issue #7）。
-# primary/secondary=null（premium 切替・週枯渇マーカー）を skip して
-# 直近の有効な rate_limits を採用する。
-# python3クラッシュ時のread失敗（set -euo pipefail 即死）を防ぐためデフォルト初期化
-CDX_5H_USED_PCT=0 CDX_5H_REMAINING_PCT=100 CDX_5H_RESETS_AT=0
-CDX_WEEK_USED_PCT=0 CDX_WEEK_REMAINING_PCT=100 CDX_WEEK_RESETS_AT=0
-CDX_RATE_LIMITS_FRESH=0 CDX_5H_WINDOW_MIN=0 CDX_WEEK_WINDOW_MIN=0
+# パーサは window_minutes で短期/週枠を分類し、primary/secondary の位置固定をしない。
+# KEY=VALUE 行を case で読むことで、将来フィールドが増えても壊れない形にする。
+# python3 クラッシュ時の空出力でも set -euo pipefail で即死しないようデフォルト初期化する。
+CDX_5H_AVAILABLE=0 CDX_5H_USED_PCT=0 CDX_5H_REMAINING_PCT=100 CDX_5H_RESETS_AT=0 CDX_5H_WINDOW_MIN=0
+CDX_WEEK_AVAILABLE=0 CDX_WEEK_USED_PCT=0 CDX_WEEK_REMAINING_PCT=100 CDX_WEEK_RESETS_AT=0 CDX_WEEK_WINDOW_MIN=0
+CDX_RATE_LIMITS_FRESH=0 CDX_RATE_LIMITS_SCHEMA=none
 _cdx_out=$(python3 "$(dirname "$0")/lib/parse_codex_rate_limits.py" "$HOME/.codex/sessions" 2>/dev/null) || true
-[ -n "$_cdx_out" ] && read CDX_5H_USED_PCT CDX_5H_REMAINING_PCT CDX_5H_RESETS_AT \
-     CDX_WEEK_USED_PCT CDX_WEEK_REMAINING_PCT CDX_WEEK_RESETS_AT \
-     CDX_RATE_LIMITS_FRESH CDX_5H_WINDOW_MIN CDX_WEEK_WINDOW_MIN <<< "$_cdx_out"
+while IFS='=' read -r _key _value; do
+  case "$_key" in
+    P5_AVAILABLE) CDX_5H_AVAILABLE=$_value ;;
+    P5_USED_PCT) CDX_5H_USED_PCT=$_value ;;
+    P5_REMAINING_PCT) CDX_5H_REMAINING_PCT=$_value ;;
+    P5_RESETS_AT) CDX_5H_RESETS_AT=$_value ;;
+    P5_WINDOW_MIN) CDX_5H_WINDOW_MIN=$_value ;;
+    WK_AVAILABLE) CDX_WEEK_AVAILABLE=$_value ;;
+    WK_USED_PCT) CDX_WEEK_USED_PCT=$_value ;;
+    WK_REMAINING_PCT) CDX_WEEK_REMAINING_PCT=$_value ;;
+    WK_RESETS_AT) CDX_WEEK_RESETS_AT=$_value ;;
+    WK_WINDOW_MIN) CDX_WEEK_WINDOW_MIN=$_value ;;
+    FRESH) CDX_RATE_LIMITS_FRESH=$_value ;;
+    SCHEMA) CDX_RATE_LIMITS_SCHEMA=$_value ;;
+  esac
+done <<< "$_cdx_out"
 
 # ── ロールオーバー投影（Issue #18）────────────────────────────
 # resets_at が過去 = ウィンドウは既に周期リセット済み。Codex を使わないと fresh データが
 # 来ず、stale な「枯渇 + ↺soon」が永久固定される。window_minutes が既知なら次リセットへ
 # 巻き進め、使用量を fresh（残100%）に投影して表示・ルーティングを正常化する。
-# window はデータ値があればそれ、欠落(0)なら定義上固定の定数（週=10080 / 5h=300）に
-# フォールバック。これにより data 欠落イベントでも投影が効き soon 固定を確実に解消する。
+# window は枠が available の時だけ、データ値または定義上固定の定数（週=10080 / 5h=300）に
+# フォールバックする。存在しない枠は roll-forward せず resets_at=0 のまま扱う。
 _NOW_ROLL=$(date +%s)
-_CDX_WK_WIN=${CDX_WEEK_WINDOW_MIN:-0}; [ "$_CDX_WK_WIN" -gt 0 ] 2>/dev/null || _CDX_WK_WIN=10080
-_CDX_5H_WIN=${CDX_5H_WINDOW_MIN:-0};   [ "$_CDX_5H_WIN" -gt 0 ] 2>/dev/null || _CDX_5H_WIN=300
-if [ "${CDX_WEEK_RESETS_AT:-0}" -gt 0 ] && [ "${CDX_WEEK_RESETS_AT}" -le "$_NOW_ROLL" ]; then
+_CDX_WK_WIN=${CDX_WEEK_WINDOW_MIN:-0}
+if [ "${CDX_WEEK_AVAILABLE:-0}" = "1" ] && ! [ "$_CDX_WK_WIN" -gt 0 ] 2>/dev/null; then
+  _CDX_WK_WIN=10080
+fi
+_CDX_5H_WIN=${CDX_5H_WINDOW_MIN:-0}
+if [ "${CDX_5H_AVAILABLE:-0}" = "1" ] && ! [ "$_CDX_5H_WIN" -gt 0 ] 2>/dev/null; then
+  _CDX_5H_WIN=300
+fi
+if [ "${CDX_WEEK_AVAILABLE:-0}" = "1" ] && [ "${CDX_WEEK_RESETS_AT:-0}" -gt 0 ] && [ "${CDX_WEEK_RESETS_AT}" -le "$_NOW_ROLL" ]; then
   CDX_WEEK_RESETS_AT=$(roll_resets_at_forward "$CDX_WEEK_RESETS_AT" "$_NOW_ROLL" "$_CDX_WK_WIN")
   CDX_WEEK_USED_PCT=0
   CDX_WEEK_REMAINING_PCT=100
 fi
-if [ "${CDX_5H_RESETS_AT:-0}" -gt 0 ] && [ "${CDX_5H_RESETS_AT}" -le "$_NOW_ROLL" ]; then
+if [ "${CDX_5H_AVAILABLE:-0}" = "1" ] && [ "${CDX_5H_RESETS_AT:-0}" -gt 0 ] && [ "${CDX_5H_RESETS_AT}" -le "$_NOW_ROLL" ]; then
   CDX_5H_RESETS_AT=$(roll_resets_at_forward "$CDX_5H_RESETS_AT" "$_NOW_ROLL" "$_CDX_5H_WIN")
   CDX_5H_USED_PCT=0
   CDX_5H_REMAINING_PCT=100
 fi
-
-# ── Codex トークン数（ccusage 補助データ）────────────────
-CDX_JSON=$(npx -y @ccusage/codex@latest daily --json --since "$BILLING_WEEK_START" --until "$TODAY" --offline 2>/dev/null < /dev/null \
-  || echo '{"daily":[],"totals":{"totalTokens":0,"costUSD":0}}')
-CDX_WEEK_TOKENS=$(echo "$CDX_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('totals',{}).get('totalTokens',0))")
-CDX_WEEK_COST=$(echo "$CDX_JSON"   | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('totals',{}).get('costUSD',0))")
-CDX_24H_TOKENS=$(echo "$CDX_JSON" | python3 -c "
-import json,sys; d=json.load(sys.stdin)
-rows=[x for x in d.get('daily',[]) if x.get('date','')=='$TODAY_CODEX_FMT']
-print(rows[0].get('totalTokens',0) if rows else 0)")
-CDX_24H_COST=$(echo "$CDX_JSON" | python3 -c "
-import json,sys; d=json.load(sys.stdin)
-rows=[x for x in d.get('daily',[]) if x.get('date','')=='$TODAY_CODEX_FMT']
-print(rows[0].get('costUSD',0) if rows else 0)")
 
 # ── Codex リセットまでの残り時間（epoch ベース・リアルタイム）──
 _NOW=$(date +%s)
@@ -254,6 +277,11 @@ fi
 # 入力を整数化して渡す（displayPrice 等の小数は %.* で除去）。
 CDX_5H_REM_INT=${CDX_5H_REMAINING_PCT%.*}
 CDX_WEEK_REM_INT=${CDX_WEEK_REMAINING_PCT%.*}
+# 5h 枠が存在しない schema では週残を短期入力にも渡す。存在しない 5h を
+# 常に 100% と見せるとルーティングが Codex 余裕ありと誤認するため。
+if [ "${CDX_5H_AVAILABLE:-0}" = "0" ]; then
+  CDX_5H_REM_INT=$CDX_WEEK_REM_INT
+fi
 CLA_7D_REM_INT=${CLA_7D_REMAINING_PCT%.*}
 DAILY_BURN_PCT=${DAILY_BURN_PCT:-20}  # 環境変数で上書き可能（デフォルト: 20%/day）
 
@@ -307,15 +335,18 @@ fi
   echo "CDX_BILLING_WEEK_START=$BILLING_WEEK_START"
   echo "CDX_HOURS_UNTIL_RESET=$CDX_HOURS_UNTIL_RESET"
   echo "CDX_DAYS_UNTIL_RESET=$CDX_DAYS_UNTIL_RESET"
+  echo "CDX_5H_AVAILABLE=$CDX_5H_AVAILABLE"
   echo "CDX_5H_USED_PCT=$CDX_5H_USED_PCT"
   echo "CDX_5H_REMAINING_PCT=$CDX_5H_REMAINING_PCT"
   echo "CDX_5H_RESETS_AT=$CDX_5H_RESETS_AT"
+  echo "CDX_WEEK_AVAILABLE=$CDX_WEEK_AVAILABLE"
   echo "CDX_WEEK_USED_PCT=$CDX_WEEK_USED_PCT"
   echo "CDX_WEEK_REMAINING_PCT=$CDX_WEEK_REMAINING_PCT"
   echo "CDX_WEEK_RESETS_AT=$CDX_WEEK_RESETS_AT"
   echo "CDX_5H_WINDOW_MIN=$CDX_5H_WINDOW_MIN"
   echo "CDX_WEEK_WINDOW_MIN=$CDX_WEEK_WINDOW_MIN"
   echo "CDX_RATE_LIMITS_FRESH=$CDX_RATE_LIMITS_FRESH"
+  echo "CDX_RATE_LIMITS_SCHEMA=$CDX_RATE_LIMITS_SCHEMA"
   echo "ROUTING_MODE=$ROUTING_MODE"
   echo "BALANCE_GAP=$BALANCE_GAP"
   echo "CDX_PROJECTED_AT_RESET=$CDX_PROJECTED_AT_RESET"
