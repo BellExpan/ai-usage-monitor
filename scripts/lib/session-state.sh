@@ -278,9 +278,19 @@ window_title_apply() {
   [ "$cur" = "$want" ] && return 0          # 既に望む形なら書かない
   tty="$(iterm_tty "$isid")"
   [ -n "$tty" ] || return 0
+  # tty 直書きは影響の大きい操作なので、パスを厳格に検証する（Codex 指摘）。
+  #   ① /dev/tty* 配下であること（将来 iterm_tty の実装が変わっても任意パスへ書かない）
+  #   ② キャラクタデバイスであること（通常ファイル・シンボリックリンク先を弾く）
+  #   ③ 自分の所有であること（他ユーザの端末へ書き込まない）
+  case "$tty" in
+    /dev/tty*) ;;
+    *) return 0 ;;
+  esac
+  [ -c "$tty" ] || return 0
+  [ -O "$tty" ] || return 0
   [ -w "$tty" ] || return 0
-  # OSC 2 に制御文字を混ぜない（BEL/ESC は終端子と衝突する）
-  want="$(printf '%s' "$want" | LC_ALL=C tr -d '\000-\037')"
+  # OSC 2 に制御文字を混ぜない（ESC/BEL は終端子と衝突する。DEL 0x7f も除去）
+  want="$(printf '%s' "$want" | LC_ALL=C tr -d '\000-\037\177')"
   [ -n "$want" ] || return 0
   printf '\033]2;%s\007' "$want" > "$tty" 2>/dev/null || true
   return 0

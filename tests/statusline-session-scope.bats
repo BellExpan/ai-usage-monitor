@@ -246,3 +246,20 @@ _age_out() {  # _age_out <file> <minutes-ago>
   [ "$status" -eq 0 ]
   [ ! -e /tmp/pwned2 ]
 }
+
+@test "window_title_apply refuses a tty path outside /dev/tty* (Codex #52)" {
+  # iterm_tty を差し替えて任意パスを返させる → 書き込まれないこと
+  iterm_tty() { printf '%s' "$CLAUDE_TURN_STATE_DIR/evil.txt"; }
+  iterm_window_name() { printf '✳ topic'; }
+  : > "$CLAUDE_TURN_STATE_DIR/evil.txt"
+  run window_title_apply idle 0 "ABC-123"
+  [ "$status" -eq 0 ]
+  [ ! -s "$CLAUDE_TURN_STATE_DIR/evil.txt" ]   # 空のまま＝書き込まれていない
+}
+
+@test "window_title_apply refuses a non-character-device under /dev (Codex #52)" {
+  iterm_tty() { printf '/dev/null/nope'; }
+  iterm_window_name() { printf '✳ topic'; }
+  run window_title_apply idle 0 "ABC-123"
+  [ "$status" -eq 0 ]
+}
