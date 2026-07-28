@@ -12,6 +12,8 @@ setup() {
   mkdir -p "$CACHE_DIR" "$HOME/.codex/sessions/2026/07/28"
   CACHE="$CACHE_DIR/cache"
   TODAY="$(date +%Y-%m-%d)"
+  YESTERDAY="$(date -v-1d +%Y-%m-%d)"
+  FIVE_DAYS_AGO="$(date -v-5d +%Y-%m-%d)"
   NOW="$(date +%s)"
   FUTURE=$(( NOW + 604800 ))
 }
@@ -58,6 +60,18 @@ codex_line() {
   [[ "$output" == *"codex_tokens_zero_despite_activity"* ]]
 }
 
+@test "昨日23時台に活動 + 今日は活動なし・トークン0 -> degraded にならない" {
+  write_cache 1 0 0
+  mkdir -p "$HOME/.codex/sessions/yesterday"
+  printf '{"type":"event_msg","timestamp":"%sT23:10:00","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1200}},"rate_limits":{"primary":{"used_percent":10,"window_minutes":10080,"resets_at":%s},"secondary":null}}}\n' \
+    "$YESTERDAY" "$FUTURE" > "$HOME/.codex/sessions/yesterday/activity.jsonl"
+
+  run env AI_USAGE_BASE_DIR="$AI_USAGE_BASE_DIR" HOME="$HOME" bash "$SELF_CHECK"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "USAGE_SRC_HEALTH=ok" ]
+}
+
 @test "WK_AVAILABLE=0 相当のセッション -> rate_limit_schema_drift" {
   write_cache 1 500 1200
   codex_line 1200 0 > "$HOME/.codex/sessions/2026/07/28/short-only.jsonl"
@@ -66,6 +80,19 @@ codex_line() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"rate_limit_schema_drift"* ]]
+}
+
+@test "rate_limits イベントが古いだけなら rate_limit_schema_drift にしない" {
+  write_cache 1 0 0
+  mkdir -p "$HOME/.codex/sessions/old"
+  printf '{"type":"event_msg","timestamp":"%sT12:00:00","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1200}},"rate_limits":{"primary":{"used_percent":10,"window_minutes":300,"resets_at":%s},"secondary":null}}}\n' \
+    "$FIVE_DAYS_AGO" "$FUTURE" > "$HOME/.codex/sessions/old/short-only.jsonl"
+
+  run env AI_USAGE_BASE_DIR="$AI_USAGE_BASE_DIR" HOME="$HOME" bash "$SELF_CHECK"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"rate_limit_schema_drift"* ]]
+  [ "$output" = "USAGE_SRC_HEALTH=ok" ]
 }
 
 @test "CLA_OAUTH_FRESH=0 -> claude_oauth_unavailable" {

@@ -39,6 +39,11 @@ _int() {
   esac
 }
 
+# Rate-limit schema checks are only actionable when recent Codex telemetry
+# exists.  The freshness threshold is 24h, matching TOKENS_24H/EVENTS_24H from
+# codex_native_tokens.py and FRESH from parse_codex_rate_limits.py.
+RATE_LIMIT_DRIFT_FRESH_EVENTS_24H=24
+
 _add_reason() {
   local reason="$1"
   case ",$REASONS," in *",$reason,"*) return ;; esac
@@ -133,35 +138,39 @@ _main() {
   native_out=$(python3 "$_SCRIPT_DIR/lib/codex_native_tokens.py" "$CODEX_SESSIONS" --today "$TODAY" 2>/dev/null) || return 3
   rate_out=$(python3 "$_SCRIPT_DIR/lib/parse_codex_rate_limits.py" "$CODEX_SESSIONS" 2>/dev/null) || return 4
 
-  local native_today native_events_24h cache_cdx_24h
+  local native_today native_events_today native_events_24h cache_cdx_today
   native_today=$(_int "$(printf '%s\n' "$native_out" | awk -F= '$1=="TOKENS_TODAY"{print $2; exit}')")
+  native_events_today=$(_int "$(printf '%s\n' "$native_out" | awk -F= '$1=="EVENTS_TODAY"{print $2; exit}')")
   native_events_24h=$(_int "$(printf '%s\n' "$native_out" | awk -F= '$1=="EVENTS_24H"{print $2; exit}')")
-  cache_cdx_24h=$(_int "$(_kv CDX_24H_TOKENS "$CACHE_PATH")")
+  cache_cdx_today=$(_int "$(_kv CDX_24H_TOKENS "$CACHE_PATH")")
 
-  if [ "$native_events_24h" -gt 0 ] && [ "$cache_cdx_24h" -eq 0 ]; then
+  if [ "$native_events_today" -gt 0 ] && [ "$cache_cdx_today" -eq 0 ]; then
     _add_reason "codex_tokens_zero_despite_activity"
   fi
 
-  if { [ "$native_today" -eq 0 ] && [ "$cache_cdx_24h" -gt 0 ]; } || \
-     { [ "$native_today" -gt 0 ] && [ "$cache_cdx_24h" -eq 0 ]; }; then
+  if { [ "$native_today" -eq 0 ] && [ "$cache_cdx_today" -gt 0 ]; } || \
+     { [ "$native_today" -gt 0 ] && [ "$cache_cdx_today" -eq 0 ]; }; then
     _add_reason "token_source_mismatch"
-  elif [ "$native_today" -gt 0 ] && [ "$cache_cdx_24h" -gt 0 ]; then
+  elif [ "$native_today" -gt 0 ] && [ "$cache_cdx_today" -gt 0 ]; then
     local big small
-    if [ "$native_today" -ge "$cache_cdx_24h" ]; then
-      big="$native_today"; small="$cache_cdx_24h"
+    if [ "$native_today" -ge "$cache_cdx_today" ]; then
+      big="$native_today"; small="$cache_cdx_today"
     else
-      big="$cache_cdx_24h"; small="$native_today"
+      big="$cache_cdx_today"; small="$native_today"
     fi
     [ "$big" -ge $(( small * 2 )) ] && _add_reason "token_source_mismatch"
   fi
 
-  local wk_avail wk_resets now cla_fresh cla_tokens cla_activity
+  local wk_avail wk_resets rate_fresh now cla_fresh cla_tokens cla_activity
   wk_avail=$(_int "$(printf '%s\n' "$rate_out" | awk -F= '$1=="WK_AVAILABLE"{print $2; exit}')")
   wk_resets=$(_int "$(printf '%s\n' "$rate_out" | awk -F= '$1=="WK_RESETS_AT"{print $2; exit}')")
+  rate_fresh=$(_int "$(printf '%s\n' "$rate_out" | awk -F= '$1=="FRESH"{print $2; exit}')")
   now=$(date +%s)
-  [ "$wk_avail" = "0" ] && _add_reason "rate_limit_schema_drift"
-  if [ "$wk_avail" = "1" ] && { [ "$wk_resets" -eq 0 ] || [ "$wk_resets" -le "$now" ]; }; then
-    _add_reason "rate_limit_resets_at_invalid"
+  if [ "$native_events_24h" -gt 0 ] || [ "$rate_fresh" = "1" ]; then
+    [ "$wk_avail" = "0" ] && _add_reason "rate_limit_schema_drift"
+    if [ "$wk_avail" = "1" ] && { [ "$wk_resets" -eq 0 ] || [ "$wk_resets" -le "$now" ]; }; then
+      _add_reason "rate_limit_resets_at_invalid"
+    fi
   fi
 
   cla_fresh=$(_int "$(_kv CLA_OAUTH_FRESH "$CACHE_PATH")")

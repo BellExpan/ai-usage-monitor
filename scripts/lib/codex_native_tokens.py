@@ -106,8 +106,7 @@ def aggregate(sessions_dir, today=None, now=None):
 
     files = sorted(glob.glob(os.path.join(sessions_dir, "**", "*.jsonl"), recursive=True))
     for path in files:
-        day_totals = []
-        totals_24h = []
+        session_events = []
         try:
             fp = open(path, encoding="utf-8")
         except OSError:
@@ -127,15 +126,15 @@ def aggregate(sessions_dir, today=None, now=None):
                         ts = os.path.getmtime(path)
                     except OSError:
                         ts = now
-                if ts >= today_start:
-                    day_totals.append(total)
-                    events_today += 1
-                if ts >= since_24h:
-                    totals_24h.append(total)
-                    events_24h += 1
+                session_events.append((ts, total))
 
-        tokens_today += _session_total(day_totals)
-        tokens_24h += _session_total(totals_24h)
+        for ts, delta in _session_deltas(session_events):
+            if ts >= today_start:
+                tokens_today += delta
+                events_today += 1
+            if ts >= since_24h:
+                tokens_24h += delta
+                events_24h += 1
 
     return {
         "TOKENS_TODAY": tokens_today,
@@ -145,20 +144,25 @@ def aggregate(sessions_dir, today=None, now=None):
     }
 
 
-def _session_total(totals):
-    if not totals:
-        return 0
-    if len(totals) == 1:
-        return totals[0]
-    out = totals[0]
-    prev = totals[0]
-    for cur in totals[1:]:
-        if cur >= prev:
-            out += cur - prev
+def _session_deltas(events):
+    """Yield ``(timestamp, positive_delta)`` for one session.
+
+    The input totals are session-level cumulative counters.  Deltas must be
+    calculated before applying a reporting window so a session that crosses
+    midnight only contributes the increment that happened after midnight.
+    Counter decreases indicate a reset/reopen; the new value becomes the next
+    baseline and the negative delta is ignored.
+    """
+    prev = None
+    for ts, cur in sorted(events, key=lambda item: item[0]):
+        if prev is None:
+            delta = cur
+        elif cur >= prev:
+            delta = cur - prev
         else:
-            out += cur
+            delta = 0
         prev = cur
-    return out
+        yield ts, delta
 
 
 def main():

@@ -56,3 +56,24 @@ write_event() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"TOKENS_TODAY=0"* ]]
 }
+
+@test "日付境界をまたぐ同一セッションは当日 delta のみを集計する" {
+  write_event "$SESS/e.jsonl" "2026-07-27T23:50:00" 900000 0 100000 0 1000000
+  write_event "$SESS/e.jsonl" "2026-07-28T00:10:00" 900900 0 100100 0 1001000
+
+  run python3 "$SCRIPT" --today 2026-07-28 "$SESS"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TOKENS_TODAY=1000"* ]]
+}
+
+@test "累計が減少した場合は負の delta を加算せず新 baseline にする" {
+  write_event "$SESS/f.jsonl" "2026-07-27T23:50:00" 900 0 100 0 1000
+  write_event "$SESS/f.jsonl" "2026-07-28T00:10:00" 810 0 90 0 900
+  write_event "$SESS/f.jsonl" "2026-07-28T00:20:00" 990 0 110 0 1100
+
+  run python3 "$SCRIPT" --today 2026-07-28 "$SESS"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TOKENS_TODAY=200"* ]]
+}

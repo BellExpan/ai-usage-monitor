@@ -25,6 +25,7 @@ EOF
 teardown() {
   rm -rf "$AI_USAGE_BASE_DIR" "$HOME"
   unset AI_USAGE_BASE_DIR HOME AUM_TEST_TODAY AUM_CCUSAGE_FAIL
+  unset AUM_CCUSAGE_EMPTY
 }
 
 write_stubs() {
@@ -51,6 +52,10 @@ if printf '%s\n' "$*" | grep -q "blocks"; then
   exit 0
 fi
 if [ "${AUM_CCUSAGE_FAIL:-0}" = "1" ]; then
+  echo '{"daily":[]}'
+  exit 42
+fi
+if [ "${AUM_CCUSAGE_EMPTY:-0}" = "1" ]; then
   echo '{"daily":[]}'
   exit 0
 fi
@@ -85,7 +90,25 @@ EOF
   [[ "$output" == *"CLA_VALUES_STALE=1"* ]]
 }
 
-@test "ccusage 取得失敗 -> トークンが 0 に化けず前回値保持 + CDX_TOKENS_STALE=1" {
+@test "ccusage daily が exit 0 かつ daily:[] -> トークン 0 を書き stale にしない" {
+  cat > "$CACHE" <<EOF
+TIMESTAMP=1
+CLA_OAUTH_FRESH=1
+CLA_24H_TOKENS=444
+CDX_24H_TOKENS=777
+EOF
+
+  run env AI_USAGE_BASE_DIR="$AI_USAGE_BASE_DIR" HOME="$HOME" AUM_CCUSAGE_EMPTY=1 bash "$CACHE_UPDATE"
+
+  [ "$status" -eq 0 ]
+  run grep -E '^(CLA_24H_TOKENS|CDX_24H_TOKENS|CLA_TOKENS_STALE|CDX_TOKENS_STALE)=' "$CACHE"
+  [[ "$output" == *"CLA_24H_TOKENS=0"* ]]
+  [[ "$output" == *"CDX_24H_TOKENS=0"* ]]
+  [[ "$output" == *"CLA_TOKENS_STALE=0"* ]]
+  [[ "$output" == *"CDX_TOKENS_STALE=0"* ]]
+}
+
+@test "ccusage daily が非ゼロ終了 -> トークンが 0 に化けず前回値保持 + CDX_TOKENS_STALE=1" {
   cat > "$CACHE" <<EOF
 TIMESTAMP=1
 CLA_OAUTH_FRESH=1
@@ -107,4 +130,19 @@ EOF
   [[ "$output" == *"CDX_WEEK_TOKENS=888"* ]]
   [[ "$output" == *"CLA_24H_TOKENS=444"* ]]
   [[ "$output" == *"CDX_TOKENS_STALE=1"* ]]
+}
+
+@test "破損した数値 cache は復元せず awk エラーなしで既定値を使う" {
+  cat > "$CACHE" <<EOF
+TIMESTAMP=1
+CLA_5H_REMAINING_PCT=abc
+EOF
+
+  run env AI_USAGE_BASE_DIR="$AI_USAGE_BASE_DIR" HOME="$HOME" bash "$CACHE_UPDATE"
+
+  [ "$status" -eq 0 ]
+  run grep -E '^(CLA_5H_REMAINING_PCT|CLA_5H_REMAINING_MINS|CLA_VALUES_STALE)=' "$CACHE"
+  [[ "$output" == *"CLA_5H_REMAINING_PCT=100"* ]]
+  [[ "$output" == *"CLA_5H_REMAINING_MINS=300"* ]]
+  [[ "$output" == *"CLA_VALUES_STALE=0"* ]]
 }
