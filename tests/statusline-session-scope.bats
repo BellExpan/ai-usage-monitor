@@ -156,6 +156,34 @@ _age_out() {  # _age_out <file> <minutes-ago>
   [[ "$output" == "🔵"* ]]
 }
 
+# ---- ID サニタイズ（Codex レビュー指摘: statusline 側・fallback 経路の抜け）----
+
+@test "session_tasks_dir sanitizes a path-traversal session id" {
+  run session_tasks_dir "../../../etc"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *".."* ]]
+}
+
+@test "turn_state_read cannot read a state file outside the state dir" {
+  mkdir -p "$CLAUDE_TURN_STATE_DIR/sub"
+  printf 'busy 1700000000 x\n' > "$CLAUDE_TURN_STATE_DIR/sub/turn-evil.state"
+  run turn_state_read "sub/evil"
+  [ "$output" = "unknown" ]
+}
+
+@test "iterm_set_title_if_changed keeps its cache inside the state dir" {
+  iterm_set_title_if_changed "✅ x" "../../evil"
+  [ ! -e "$CLAUDE_TURN_STATE_DIR/../../evil" ]
+  # サニタイズ後の名前で state dir 直下にのみ作られる
+  run bash -c "ls -1 '$CLAUDE_TURN_STATE_DIR' | grep -c '^title-'"
+  [ "$output" = "1" ]
+}
+
+@test "iterm_set_title refuses an id that sanitizes to empty (no osascript)" {
+  run iterm_set_title "✅ x" "///"
+  [ "$status" -eq 0 ]
+}
+
 @test "session_title strips quotes and control chars (AppleScript injection)" {
   run session_title idle 0 "$(printf 'ev"il\\ x')"
   [ "$status" -eq 0 ]

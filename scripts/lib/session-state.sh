@@ -23,10 +23,20 @@ _ss_fresh_mins() {
   printf '%s' "$m"
 }
 
+# _ss_sanitize_id <raw>
+#   session_id / iTerm session id は「パス構成要素」と「AppleScript 文字列」の両方に埋まる。
+#   入口を 1 箇所に集約し、UUID 相当の文字だけ通す（path traversal / AppleScript 注入の遮断）。
+#   Codex レビュー指摘: statusline 側の stdin session_id と ITERM_SESSION_ID fallback が
+#   サニタイズ漏れしていたため、各関数の入口で必ずこれを通す。
+_ss_sanitize_id() {
+  printf '%s' "${1:-}" | LC_ALL=C tr -cd 'A-Za-z0-9-' | cut -c1-64
+}
+
 # session_tasks_dir <session_id>
 #   → そのセッションの tasks ディレクトリ絶対パス（無ければ空文字）
 session_tasks_dir() {
-  local sid="${1:-}" root d
+  local sid root d
+  sid="$(_ss_sanitize_id "${1:-}")"
   [ -n "$sid" ] || return 0
   root="$(_ss_tasks_root)"
   [ -d "$root" ] || return 0
@@ -52,7 +62,8 @@ session_bg_count() {
 # session_other_bg_count <session_id>
 #   → 他セッション（＝他 terminal）の bg 件数。消さずに別枠表示するため。
 session_other_bg_count() {
-  local sid="${1:-}" root total own diff
+  local sid root total own diff
+  sid="$(_ss_sanitize_id "${1:-}")"
   root="$(_ss_tasks_root)"
   [ -d "$root" ] || { printf '0'; return 0; }
   total="$(find "$root" -name '*.output' -mmin "-$(_ss_fresh_mins)" 2>/dev/null | grep -c .)" || true
@@ -64,7 +75,8 @@ session_other_bg_count() {
 
 # turn_state_read <session_id> → busy | wait | idle | unknown
 turn_state_read() {
-  local sid="${1:-}" f s
+  local sid f s
+  sid="$(_ss_sanitize_id "${1:-}")"
   [ -n "$sid" ] || { printf 'unknown'; return 0; }
   f="$(_ss_state_dir)/turn-${sid}.state"
   [ -f "$f" ] || { printf 'unknown'; return 0; }
@@ -77,13 +89,14 @@ turn_state_read() {
 
 # turn_state_iterm_id <session_id> → iTerm2 セッション UUID（無ければ空）
 turn_state_iterm_id() {
-  local sid="${1:-}" f v
+  local sid f v
+  sid="$(_ss_sanitize_id "${1:-}")"
   [ -n "$sid" ] || return 0
   f="$(_ss_state_dir)/turn-${sid}.state"
   [ -f "$f" ] || return 0
   v="$(LC_ALL=C awk 'NR==1{print $3}' "$f" 2>/dev/null)"
   v="${v##*:}"   # w2t0p0:UUID → UUID
-  printf '%s' "$(printf '%s' "$v" | LC_ALL=C tr -cd 'A-Za-z0-9-')"
+  _ss_sanitize_id "$v"
 }
 
 # turn_banner <state> <own_bg_count> → statusline 行頭に出す状態バナー（色なし）
@@ -128,7 +141,8 @@ session_title() {
 #   /dev/tty は Claude Code の子プロセスから届かない（制御端末を持たない）ため、
 #   AppleScript で iTerm2 のセッションを id 直指定して更新する。
 iterm_set_title() {
-  local title="${1:-}" isid="${2:-}"
+  local title="${1:-}" isid
+  isid="$(_ss_sanitize_id "${2:-}")"
   [ -n "$isid" ] || return 0
   [ -n "$title" ] || return 0
   [ -x /usr/bin/osascript ] || return 0
@@ -150,7 +164,8 @@ iterm_set_title() {
 # iterm_set_title_if_changed <title> <iterm_session_id>
 #   statusline は数秒ごとに走るため、変化時のみ osascript を呼ぶ（~230ms を毎回払わない）。
 iterm_set_title_if_changed() {
-  local title="${1:-}" isid="${2:-}" dir cache prev
+  local title="${1:-}" isid dir cache prev
+  isid="$(_ss_sanitize_id "${2:-}")"
   [ -n "$isid" ] || return 0
   [ -n "$title" ] || return 0
   dir="$(_ss_state_dir)"
