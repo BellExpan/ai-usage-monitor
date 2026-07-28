@@ -265,3 +265,13 @@ _age_out() {  # _age_out <file> <minutes-ago>
   run window_title_apply idle 0 "ABC-123"
   [ "$status" -eq 0 ]
 }
+
+@test "strip_size_suffix removes the transient iTerm resize indicator" {
+  run strip_size_suffix "CrispPage の完成状況確認 — 91✕41"
+  [ "$output" = "CrispPage の完成状況確認" ]
+}
+
+@test "strip_size_suffix keeps an em-dash that is part of the title" {
+  run strip_size_suffix "CrispPage — v1 出荷準備"
+  [ "$output" = "CrispPage — v1 出荷準備" ]
+}

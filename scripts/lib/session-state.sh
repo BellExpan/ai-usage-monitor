@@ -273,6 +273,22 @@ strip_cc_marker() {
   printf '%s' "$n"
 }
 
+# strip_size_suffix <name> → iTerm2 がリサイズ中に一時表示する " — 91✕41" を除去
+#   読んで書き戻す設計なので、リサイズ中に書くとサイズ表記が焼き付く（実機で観測）。
+#   ✕ は U+2715。`— <数字>✕<数字>` の形だけを落とす。
+strip_size_suffix() {
+  local n="${1:-}"
+  case "$n" in
+    *" — "[0-9]*"✕"[0-9]*)
+      case "${n##* — }" in
+        *[!0-9✕]*) ;;                 # 数字と ✕ 以外を含むなら本文なので触らない
+        *) n="${n% — *}" ;;
+      esac
+      ;;
+  esac
+  printf '%s' "$n"
+}
+
 # window_title_apply <state> <own_bg_count> <iterm_session_id>
 #   停止中（idle/wait）のときだけ、ウィンドウタイトルへ状態を前置する。
 window_title_apply() {
@@ -289,6 +305,7 @@ window_title_apply() {
   [ -n "$cur" ] || return 0
   base="$(strip_state_prefix "$cur")"
   base="$(strip_cc_marker "$base")"
+  base="$(strip_size_suffix "$base")"
   [ -n "$base" ] || return 0
   want="${glyph} ${base}"
   [ "$cur" = "$want" ] && return 0          # 既に望む形なら書かない
