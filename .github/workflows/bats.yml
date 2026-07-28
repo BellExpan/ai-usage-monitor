@@ -24,6 +24,10 @@ name: bats
 #     軽量化が必要になったら job/step の conditional で早期 success を返す方式にする。
 #   - main への push でも実行（merge 後の最終確認）
 
+# GITHUB_TOKEN は読み取りのみ（PR 側のコードを実行する workflow なので最小権限にする）
+permissions:
+  contents: read
+
 on:
   pull_request:
   push:
@@ -42,6 +46,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # PR 側のコードを実行するため、token を git config に残さない
+          persist-credentials: false
 
       - name: Install bats
         run: |
