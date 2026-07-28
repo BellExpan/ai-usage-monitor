@@ -216,9 +216,11 @@ _age_out() {  # _age_out <file> <minutes-ago>
   [ "$output" = "CrispPage の完成状況確認" ]
 }
 
-@test "strip_cc_marker removes a braille spinner frame" {
+@test "strip_cc_marker leaves a braille spinner frame alone (busy only; we never write then)" {
+  # 点字スピナーは実行中にしか出ず、実行中は window_title_apply が書かないので剥がす必要がない。
+  # マルチバイト文字クラスは GNU sed / C ロケールで動かず Linux CI が落ちたため対象外にした。
   run strip_cc_marker "⠐ CrispPage v1 出荷準備"
-  [ "$output" = "CrispPage v1 出荷準備" ]
+  [ "$output" = "⠐ CrispPage v1 出荷準備" ]
 }
 
 @test "strip_cc_marker leaves a plain title untouched" {

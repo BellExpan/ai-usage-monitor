@@ -251,10 +251,26 @@ iterm_window_name() {
   end tell" 2>/dev/null
 }
 
-# strip_cc_marker <name> → Claude Code が付ける先頭マーカー（✳ / 点字スピナー）を除去
-#   点字スピナーは U+2800〜U+28FF。前置後の見た目を `✅ ✳ 会話名` と二重にしないため。
+# strip_cc_marker <name> → Claude Code が停止中に付ける先頭マーカー `✳` を除去
+#   前置後の見た目を `✅ ✳ 会話名` と二重にしないため。
+#
+#   点字スピナー（U+2800-28FF）は **実行中にしか出ず、実行中は我々が書かない**ので対象外。
+#   sed のマルチバイト文字クラス `[⠀-⣿]` は GNU sed / C ロケールで動かず Linux CI が落ちた。
+#   ここは shell のパターン削除（バイト厳密・ロケール非依存）で実装する。
 strip_cc_marker() {
-  printf '%s' "${1:-}" | sed -E 's/^(✳|[⠀-⣿])[[:space:]]*//'
+  local n="${1:-}"
+  case "$n" in
+    "✳ "*) n="${n#"✳ "}" ;;
+    "✳"*)  n="${n#"✳"}"  ;;
+  esac
+  # 先頭に残った空白を落とす
+  while :; do
+    case "$n" in
+      " "*|"	"*) n="${n#?}" ;;
+      *) break ;;
+    esac
+  done
+  printf '%s' "$n"
 }
 
 # window_title_apply <state> <own_bg_count> <iterm_session_id>
