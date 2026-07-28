@@ -1,0 +1,90 @@
+name: bats
+
+# Issue #37: tests/**/*.bats を CI で自動実行して回帰防止する
+#
+# 背景:
+#   - #34 / #35 で「外部データ源の契約変更を bats で固定する」方針を採ったが、
+#     この repo には workflow が無く `gh pr checks` は `no checks reported` を返していた。
+#   - つまり 230+ 件の bats が **手動実行頼み**で、回帰検知として機能していなかった。
+#     （ai-org memory: feedback_harness_must_be_landed_and_wired
+#       「ハーネスは main 着地 + 自動起動配線まで確認して初めて効く」）
+#
+# 設計:
+#   - runs-on は ubuntu-latest。
+#     当初 self-hosted macOS を指定したが、org runner（bellspan-ci-1..5）は
+#     status=online / busy=false にもかかわらず **10 分以上ジョブを拾わなかった**
+#     （runner 再起動後も同じ）。原因未特定のまま required check にすると
+#     「永久 pending → BLOCKED」になるため、まず確実に緑になる ubuntu-latest で
+#     ハーネスを稼働させる。macOS 固有パス（getconf DARWIN_USER_TEMP_DIR /
+#     BSD date -v / security）に依存するテストは Linux では skip される。
+#     macOS でのフル実行は runner 復旧後に別 Issue で対応する。
+#   - paths フィルタは付けない。required check にしたとき
+#     「paths 不一致で起動せず永久 pending → mergeStateStatus BLOCKED」になるのを防ぐ
+#     （ai-org memory: feedback_required_check_path_filter_deadlock）。
+#     軽量化が必要になったら job/step の conditional で早期 success を返す方式にする。
+#   - main への push でも実行（merge 後の最終確認）
+
+# GITHUB_TOKEN は読み取りのみ（PR 側のコードを実行する workflow なので最小権限にする）
+permissions:
+  contents: read
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# 同一 PR で複数 push が走った場合は古い run を cancel して runner を節約
+concurrency:
+  group: bats-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bats:
+    name: bats tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # PR 側のコードを実行するため、token を git config に残さない
+          persist-credentials: false
+
+      - name: Install bats
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y bats
+          bats --version
+
+      - name: Show versions
+        run: |
+          set -euo pipefail
+          uname -a
+          python3 --version
+
+      - name: List discovered bats files
+        run: |
+          set -euo pipefail
+          if [ ! -d tests ]; then
+            echo "::error::tests/ ディレクトリが存在しません"
+            exit 1
+          fi
+          find tests -type f -name '*.bats' | sort | tee /tmp/aum_bats_files.txt
+          if [ ! -s /tmp/aum_bats_files.txt ]; then
+            echo "::error::tests/ 配下に .bats ファイルがありません（Issue #37 の前提崩壊）"
+            exit 1
+          fi
+          echo "count=$(wc -l < /tmp/aum_bats_files.txt | tr -d ' ')"
+
+      - name: Run bats
+        env:
+          # 本番 cache（$(getconf DARWIN_USER_TEMP_DIR)ai-usage-monitor/cache）を
+          # CI が絶対に書き換えないよう、テスト用の隔離ベースディレクトリを強制する。
+          AI_USAGE_BASE_DIR: ${{ runner.temp }}/aum-ci
+          # 無音が正常なテスト（run_watched 系）を誤 kill しない
+          RUN_WATCHED_TMP: ${{ runner.temp }}/aum-ci-logs
+        run: |
+          set -euo pipefail
+          mkdir -p "$AI_USAGE_BASE_DIR" "$RUN_WATCHED_TMP"
+          bats -r tests

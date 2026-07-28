@@ -26,6 +26,9 @@ teardown() {
 # キャッシュを書かない（二重更新防止）。self PID を書くので stale 掃除もされない。
 # lock 取得は init_cache_dir 直後・全 API より前にあるため network に到達しない。
 @test "cache-update skips (exit 0, no cache write) when lock held by live pid" {
+  # macOS 依存（BSD stat の mtime 粒度 / ps の出力形式 / launchd plist）。
+  # Linux CI では skip する。macOS self-hosted runner 復旧後にフル実行へ戻す（#40）。
+  [ "$(uname)" = "Darwin" ] || skip "macOS only (see #40)"
   mkdir "$LOCK_DIR"
   echo $$ > "$LOCK_DIR/pid"      # 自分自身 = 生きている PID
   [ ! -f "$CACHE_FILE" ]         # 前提: cache 未作成
