@@ -74,6 +74,8 @@ CDX_5H_AVAILABLE=${CDX_5H_AVAILABLE:-1}
 CDX_WEEK_AVAILABLE=${CDX_WEEK_AVAILABLE:-1}
 # Codex リセット epoch も default（cache 不在時に下の -gt/-le 比較が integer expected で死ぬのを防ぐ）
 CDX_WEEK_RESETS_AT=${CDX_WEEK_RESETS_AT:-0}
+CDX_RATE_LIMITS_FRESH=${CDX_RATE_LIMITS_FRESH:-0}
+USAGE_SRC_HEALTH=${USAGE_SRC_HEALTH:-ok}
 CDX_5H_RESETS_AT=${CDX_5H_RESETS_AT:-0}
 # Claude 週次も Codex と対称に default。Claude の 1w は stdin に来ず必ず cache 依存だが
 # macOS の temp dir は定期クリアされ「cache 不在」は常態。default が無いと 1w だけ静かに
@@ -114,6 +116,20 @@ if [ -z "$CLA_WEEK_REMAINING_PCT" ] && [ -n "${CLA_7D_REMAINING_PCT:-}" ]; then
 fi
 
 SNT_REMAINING_PCT=${CLA_7D_SONNET_REMAINING_PCT:-}
+CLA_5H_LABEL="${CLA_5H_REMAINING_PCT}%"
+CLA_WEEK_LABEL="${CLA_WEEK_REMAINING_PCT}%"
+SNT_LABEL="${SNT_REMAINING_PCT}%"
+if [ "${CLA_OAUTH_FRESH:-0}" != "1" ]; then
+  CLA_5H_LABEL="?"
+  CLA_WEEK_LABEL="?"
+  SNT_LABEL="?"
+fi
+CDX_5H_LABEL="${CDX_5H_REMAINING_PCT%.*}%"
+CDX_WEEK_LABEL="${CDX_WEEK_REMAINING_PCT%.*}%"
+if [ "${CDX_RATE_LIMITS_FRESH:-0}" != "1" ]; then
+  CDX_5H_LABEL="?"
+  CDX_WEEK_LABEL="?"
+fi
 
 # ── 色設定 ──────────────────────────────────────────────────
 cyan='\033[36m'
@@ -212,11 +228,11 @@ _cla_lbl=$(reset_label_from_epoch "${CLA_7D_RESETS_AT:-0}" "$_reset_now" 10080)
 
 # Claude %（OAuth 優先）— 絵文字後スペース + ラベルをシアンで色付け
 if [ -n "$CLA_WEEK_REMAINING_PCT" ] && [ -n "$SNT_REMAINING_PCT" ]; then
-  CLA_DISPLAY="${CLA_IC} ${cyan}Claude${reset}:5h${CLA_5H_REMAINING_PCT}%/1w${CLA_WEEK_REMAINING_PCT}%/Snt1w${SNT_REMAINING_PCT}%${CLA_RESET_LABEL}"
+  CLA_DISPLAY="${CLA_IC} ${cyan}Claude${reset}:5h${CLA_5H_LABEL}/1w${CLA_WEEK_LABEL}/Snt1w${SNT_LABEL}${CLA_RESET_LABEL}"
 elif [ -n "$CLA_WEEK_REMAINING_PCT" ]; then
-  CLA_DISPLAY="${CLA_IC} ${cyan}Claude${reset}:5h${CLA_5H_REMAINING_PCT}%/1w${CLA_WEEK_REMAINING_PCT}%${CLA_RESET_LABEL}"
+  CLA_DISPLAY="${CLA_IC} ${cyan}Claude${reset}:5h${CLA_5H_LABEL}/1w${CLA_WEEK_LABEL}${CLA_RESET_LABEL}"
 else
-  CLA_DISPLAY="${CLA_IC} ${cyan}Claude${reset}:5h${CLA_5H_REMAINING_PCT}%${CLA_RESET_LABEL}"
+  CLA_DISPLAY="${CLA_IC} ${cyan}Claude${reset}:5h${CLA_5H_LABEL}${CLA_RESET_LABEL}"
 fi
 
 # Codex リセット残り時間ラベル（週枠・epoch からリアルタイム計算、Claude と対称）
@@ -227,9 +243,9 @@ CDX_RESET_LABEL=""
 _cdx_lbl=$(reset_label_from_epoch "${CDX_WEEK_RESETS_AT:-0}" "$_reset_now" "${CDX_WEEK_WINDOW_MIN:-10080}")
 [ -n "$_cdx_lbl" ] && CDX_RESET_LABEL=" ${dim}${_cdx_lbl}${reset}"
 if [ "${CDX_5H_AVAILABLE:-1}" = "1" ]; then
-  CDX_DISPLAY="${CDX_IC} ${yellow}Codex${reset}:5h${CDX_5H_REMAINING_PCT%.*}%/1w${CDX_WEEK_REMAINING_PCT%.*}%${CDX_RESET_LABEL}"
+  CDX_DISPLAY="${CDX_IC} ${yellow}Codex${reset}:5h${CDX_5H_LABEL}/1w${CDX_WEEK_LABEL}${CDX_RESET_LABEL}"
 else
-  CDX_DISPLAY="${CDX_IC} ${yellow}Codex${reset}:1w${CDX_WEEK_REMAINING_PCT%.*}%${CDX_RESET_LABEL}"
+  CDX_DISPLAY="${CDX_IC} ${yellow}Codex${reset}:1w${CDX_WEEK_LABEL}${CDX_RESET_LABEL}"
 fi
 
 [ -n "$parts" ] && printf "%b\n" "$parts"
@@ -241,6 +257,9 @@ if [ -n "${TIMESTAMP:-}" ] && [ "$TIMESTAMP" -gt 0 ] 2>/dev/null; then
   last_update="  ${dim}↻$(date -r "$TIMESTAMP" +%H:%M)${reset}"
 fi
 usage_line="${CLA_DISPLAY} ${CDX_DISPLAY}${MODE}${last_update}"
+if [ "${USAGE_SRC_HEALTH:-ok}" != "ok" ]; then
+  usage_line="${usage_line} ⚠src"
+fi
 printf "%b\n" "$usage_line"
 
 # ── Line 3: bg tasks / PR / ffmpeg / ai-org-progress ────────

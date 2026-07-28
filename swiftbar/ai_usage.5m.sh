@@ -49,6 +49,7 @@ CDX_WEEK_RESETS_AT=${CDX_WEEK_RESETS_AT:-0}
 CDX_RATE_LIMITS_FRESH=${CDX_RATE_LIMITS_FRESH:-0}
 ROUTING_MODE=${ROUTING_MODE:-normal}
 TIMESTAMP=${TIMESTAMP:-0}
+USAGE_SRC_HEALTH=${USAGE_SRC_HEALTH:-ok}
 
 # リセット時刻を人間が読める形に変換
 fmt_reset() {
@@ -76,25 +77,44 @@ CDX_WK_COLOR=$(color_hex "$CDX_WEEK_REMAINING_PCT")
 STALE_WARN=""; AGE=$(( $(date +%s) - TIMESTAMP ))
 [ "$AGE" -gt 1800 ] && STALE_WARN=" ⚠"
 
+CLA_5H_LABEL="${CLA_5H_REMAINING_PCT}%"
+CLA_7D_LABEL="${CLA_7D_REMAINING_PCT}%"
+CLA_SNT_LABEL="${CLA_7D_SONNET_REMAINING_PCT}%"
+if [ "$CLA_OAUTH_FRESH" != "1" ]; then
+  CLA_5H_LABEL="?"
+  CLA_7D_LABEL="?"
+  CLA_SNT_LABEL="?"
+fi
+CDX_5H_LABEL="${CDX_5H_REMAINING_PCT%.*}%"
+CDX_WEEK_LABEL="${CDX_WEEK_REMAINING_PCT%.*}%"
+if [ "$CDX_RATE_LIMITS_FRESH" != "1" ]; then
+  CDX_5H_LABEL="?"
+  CDX_WEEK_LABEL="?"
+fi
+
 # ── メニューバー ──────────────────────────────────────────
 # 例: 🟢 Claude 残54分 | 🟢 Codex 5h:99% 週:99%
-echo "${CLA_ICON} Claude ${CLA_5H_REMAINING_PCT}%/週${CLA_7D_REMAINING_PCT}%/Sonnet${CLA_7D_SONNET_REMAINING_PCT}%  |  ${CDX_5H_ICON} Codex ${CDX_5H_REMAINING_PCT%.*}%/週${CDX_WEEK_REMAINING_PCT%.*}%${STALE_WARN}"
+echo "${CLA_ICON} Claude ${CLA_5H_LABEL}/週${CLA_7D_LABEL}/Sonnet${CLA_SNT_LABEL}  |  ${CDX_5H_ICON} Codex ${CDX_5H_LABEL}/週${CDX_WEEK_LABEL}${STALE_WARN}"
 echo "---"
+if [ "$USAGE_SRC_HEALTH" != "ok" ]; then
+  echo "⚠️ データ源 degraded: ${USAGE_SRC_HEALTH#degraded:} | color=#FF9500"
+  echo "---"
+fi
 
 # ── Claude ───────────────────────────────────────────────
 OAUTH_MARK=""; [ "$CLA_OAUTH_FRESH" != "1" ] && OAUTH_MARK=" (概算)"
 echo "Claude (Max 20x)${OAUTH_MARK} | font=Menlo size=13 color=$CLA_COLOR"
-echo "  セッション(5h)  残${CLA_5H_REMAINING_PCT}% (${CLA_5H_USED_PCT}%使用) | font=Menlo size=12 color=$CLA_COLOR"
-echo "  週次 全モデル   残${CLA_7D_REMAINING_PCT}% (${CLA_7D_USED_PCT}%使用) | font=Menlo size=12"
-echo "  週次 Sonnetのみ 残${CLA_7D_SONNET_REMAINING_PCT}% (${CLA_7D_SONNET_USED_PCT}%使用) | font=Menlo size=12"
+echo "  セッション(5h)  残${CLA_5H_LABEL} (${CLA_5H_USED_PCT}%使用) | font=Menlo size=12 color=$CLA_COLOR"
+echo "  週次 全モデル   残${CLA_7D_LABEL} (${CLA_7D_USED_PCT}%使用) | font=Menlo size=12"
+echo "  週次 Sonnetのみ 残${CLA_SNT_LABEL} (${CLA_7D_SONNET_USED_PCT}%使用) | font=Menlo size=12"
 echo "  7d    $(awk "BEGIN{printf \"%.1fG\",$CLA_7D_TOKENS/1000000000}") tokens / \$$(printf '%.2f' "$CLA_7D_COST") | font=Menlo size=12"
 echo "---"
 
 # ── Codex ────────────────────────────────────────────────
 FRESH_MARK=""; [ "$CDX_RATE_LIMITS_FRESH" != "1" ] && FRESH_MARK=" (データ古い可能性)"
 echo "Codex (Plus)${FRESH_MARK} | font=Menlo size=13"
-echo "  5h窓  ${CDX_5H_ICON} 残り ${CDX_5H_REMAINING_PCT}% (${CDX_5H_USED_PCT}%使用) リセット:${CDX_5H_RESET_TIME} | font=Menlo size=12 color=$CDX_5H_COLOR"
-echo "  週次  ${CDX_WK_ICON} 残り ${CDX_WEEK_REMAINING_PCT}% (${CDX_WEEK_USED_PCT}%使用) リセット:${CDX_WEEK_RESET_DATE} | font=Menlo size=12 color=$CDX_WK_COLOR"
+echo "  5h窓  ${CDX_5H_ICON} 残り ${CDX_5H_LABEL} (${CDX_5H_USED_PCT}%使用) リセット:${CDX_5H_RESET_TIME} | font=Menlo size=12 color=$CDX_5H_COLOR"
+echo "  週次  ${CDX_WK_ICON} 残り ${CDX_WEEK_LABEL} (${CDX_WEEK_USED_PCT}%使用) リセット:${CDX_WEEK_RESET_DATE} | font=Menlo size=12 color=$CDX_WK_COLOR"
 echo "---"
 
 # ── ルーティングモード ────────────────────────────────────
