@@ -208,3 +208,70 @@ _age_out() {  # _age_out <file> <minutes-ago>
   [ "$status" -eq 0 ]
   [ ! -e /tmp/pwned ]
 }
+
+# ---- ウィンドウタイトル（1窓1タブでタブバーが隠れる環境向け・Issue #51）----
+
+@test "strip_cc_marker removes the Claude Code idle marker" {
+  run strip_cc_marker "✳ CrispPage の完成状況確認"
+  [ "$output" = "CrispPage の完成状況確認" ]
+}
+
+@test "strip_cc_marker leaves a braille spinner frame alone (busy only; we never write then)" {
+  # 点字スピナーは実行中にしか出ず、実行中は window_title_apply が書かないので剥がす必要がない。
+  # マルチバイト文字クラスは GNU sed / C ロケールで動かず Linux CI が落ちたため対象外にした。
+  run strip_cc_marker "⠐ CrispPage v1 出荷準備"
+  [ "$output" = "⠐ CrispPage v1 出荷準備" ]
+}
+
+@test "strip_cc_marker leaves a plain title untouched" {
+  run strip_cc_marker "CrispPage v1 出荷準備"
+  [ "$output" = "CrispPage v1 出荷準備" ]
+}
+
+@test "window_title_apply does nothing while busy (leaves the spinner alone)" {
+  run window_title_apply busy 0 "ABC-123"
+  [ "$status" -eq 0 ]
+}
+
+@test "window_title_apply does nothing for unknown state (fail-open)" {
+  run window_title_apply unknown 0 "ABC-123"
+  [ "$status" -eq 0 ]
+}
+
+@test "window_title_apply is a no-op without an iterm session id (fail-open)" {
+  run window_title_apply idle 0 ""
+  [ "$status" -eq 0 ]
+}
+
+@test "iterm_tty sanitizes its id (no AppleScript injection)" {
+  run iterm_tty '"; do shell script "touch /tmp/pwned2"; --'
+  [ "$status" -eq 0 ]
+  [ ! -e /tmp/pwned2 ]
+}
+
+@test "window_title_apply refuses a tty path outside /dev/tty* (Codex #52)" {
+  # iterm_tty を差し替えて任意パスを返させる → 書き込まれないこと
+  iterm_tty() { printf '%s' "$CLAUDE_TURN_STATE_DIR/evil.txt"; }
+  iterm_window_name() { printf '✳ topic'; }
+  : > "$CLAUDE_TURN_STATE_DIR/evil.txt"
+  run window_title_apply idle 0 "ABC-123"
+  [ "$status" -eq 0 ]
+  [ ! -s "$CLAUDE_TURN_STATE_DIR/evil.txt" ]   # 空のまま＝書き込まれていない
+}
+
+@test "window_title_apply refuses a non-character-device under /dev (Codex #52)" {
+  iterm_tty() { printf '/dev/null/nope'; }
+  iterm_window_name() { printf '✳ topic'; }
+  run window_title_apply idle 0 "ABC-123"
+  [ "$status" -eq 0 ]
+}
+
+@test "strip_size_suffix removes the transient iTerm resize indicator" {
+  run strip_size_suffix "CrispPage の完成状況確認 — 91✕41"
+  [ "$output" = "CrispPage の完成状況確認" ]
+}
+
+@test "strip_size_suffix keeps an em-dash that is part of the title" {
+  run strip_size_suffix "CrispPage — v1 出荷準備"
+  [ "$output" = "CrispPage — v1 出荷準備" ]
+}

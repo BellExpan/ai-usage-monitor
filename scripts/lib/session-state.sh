@@ -202,3 +202,129 @@ iterm_apply_state_prefix() {
   end tell" >/dev/null 2>&1 || true
   return 0
 }
+
+# ── ウィンドウタイトル（OSC 2）─────────────────────────────────────────
+# なぜタブ名ではなくウィンドウタイトルなのか（Issue #51）:
+#   1窓1タブ運用では iTerm2 がタブバーを隠すため、タブ名は**表示されない**。
+#   実際に見えるのはウィンドウタイトル（最上部）だが、`set name of window` は
+#   AppleScript から書けない（-10006）。`tty of session` を取得して OSC 2 を
+#   直接書き込めば設定できる（実測）。
+#
+# Claude Code との住み分け:
+#   実行中 = Claude Code が点字スピナーを毎フレーム書く（＝「動いている」は既に見える）
+#   停止中 = 静止した `✳ <会話タイトル>` になる → ここに我々が「なぜ止まっているか」を前置する
+#   よって busy の間は**何も書かない**（奪い合わない）。idle/wait のみ書く。
+
+# iterm_tty <iterm_session_id> → そのセッションの tty デバイスパス（無ければ空）
+iterm_tty() {
+  local isid
+  isid="$(_ss_sanitize_id "${1:-}")"
+  [ -n "$isid" ] || return 0
+  [ -x /usr/bin/osascript ] || return 0
+  /usr/bin/osascript -e "tell application \"iTerm2\"
+    repeat with w in windows
+      repeat with t in tabs of w
+        repeat with s in sessions of t
+          if id of s is \"$isid\" then return tty of s
+        end repeat
+      end repeat
+    end repeat
+    return \"\"
+  end tell" 2>/dev/null
+}
+
+# iterm_window_name <iterm_session_id> → そのセッションが属する窓のタイトル
+iterm_window_name() {
+  local isid
+  isid="$(_ss_sanitize_id "${1:-}")"
+  [ -n "$isid" ] || return 0
+  [ -x /usr/bin/osascript ] || return 0
+  /usr/bin/osascript -e "tell application \"iTerm2\"
+    repeat with w in windows
+      repeat with t in tabs of w
+        repeat with s in sessions of t
+          if id of s is \"$isid\" then return name of w
+        end repeat
+      end repeat
+    end repeat
+    return \"\"
+  end tell" 2>/dev/null
+}
+
+# strip_cc_marker <name> → Claude Code が停止中に付ける先頭マーカー `✳` を除去
+#   前置後の見た目を `✅ ✳ 会話名` と二重にしないため。
+#
+#   点字スピナー（U+2800-28FF）は **実行中にしか出ず、実行中は我々が書かない**ので対象外。
+#   sed のマルチバイト文字クラス `[⠀-⣿]` は GNU sed / C ロケールで動かず Linux CI が落ちた。
+#   ここは shell のパターン削除（バイト厳密・ロケール非依存）で実装する。
+strip_cc_marker() {
+  local n="${1:-}"
+  case "$n" in
+    "✳ "*) n="${n#"✳ "}" ;;
+    "✳"*)  n="${n#"✳"}"  ;;
+  esac
+  # 先頭に残った空白を落とす
+  while :; do
+    case "$n" in
+      " "*|"	"*) n="${n#?}" ;;
+      *) break ;;
+    esac
+  done
+  printf '%s' "$n"
+}
+
+# strip_size_suffix <name> → iTerm2 がリサイズ中に一時表示する " — 91✕41" を除去
+#   読んで書き戻す設計なので、リサイズ中に書くとサイズ表記が焼き付く（実機で観測）。
+#   ✕ は U+2715。`— <数字>✕<数字>` の形だけを落とす。
+strip_size_suffix() {
+  local n="${1:-}"
+  case "$n" in
+    *" — "[0-9]*"✕"[0-9]*)
+      case "${n##* — }" in
+        *[!0-9✕]*) ;;                 # 数字と ✕ 以外を含むなら本文なので触らない
+        *) n="${n% — *}" ;;
+      esac
+      ;;
+  esac
+  printf '%s' "$n"
+}
+
+# window_title_apply <state> <own_bg_count> <iterm_session_id>
+#   停止中（idle/wait）のときだけ、ウィンドウタイトルへ状態を前置する。
+window_title_apply() {
+  local state="${1:-unknown}" bg="${2:-0}" isid glyph tty cur base want
+  case "$state" in
+    idle|wait) ;;
+    *) return 0 ;;   # busy/unknown は Claude Code のスピナーに任せる
+  esac
+  isid="$(_ss_sanitize_id "${3:-}")"
+  [ -n "$isid" ] || return 0
+  glyph="$(state_glyph "$state" "$bg")"
+  [ -n "$glyph" ] || return 0
+  cur="$(iterm_window_name "$isid")"
+  [ -n "$cur" ] || return 0
+  base="$(strip_state_prefix "$cur")"
+  base="$(strip_cc_marker "$base")"
+  base="$(strip_size_suffix "$base")"
+  [ -n "$base" ] || return 0
+  want="${glyph} ${base}"
+  [ "$cur" = "$want" ] && return 0          # 既に望む形なら書かない
+  tty="$(iterm_tty "$isid")"
+  [ -n "$tty" ] || return 0
+  # tty 直書きは影響の大きい操作なので、パスを厳格に検証する（Codex 指摘）。
+  #   ① /dev/tty* 配下であること（将来 iterm_tty の実装が変わっても任意パスへ書かない）
+  #   ② キャラクタデバイスであること（通常ファイル・シンボリックリンク先を弾く）
+  #   ③ 自分の所有であること（他ユーザの端末へ書き込まない）
+  case "$tty" in
+    /dev/tty*) ;;
+    *) return 0 ;;
+  esac
+  [ -c "$tty" ] || return 0
+  [ -O "$tty" ] || return 0
+  [ -w "$tty" ] || return 0
+  # OSC 2 に制御文字を混ぜない（ESC/BEL は終端子と衝突する。DEL 0x7f も除去）
+  want="$(printf '%s' "$want" | LC_ALL=C tr -d '\000-\037\177')"
+  [ -n "$want" ] || return 0
+  printf '\033]2;%s\007' "$want" > "$tty" 2>/dev/null || true
+  return 0
+}
