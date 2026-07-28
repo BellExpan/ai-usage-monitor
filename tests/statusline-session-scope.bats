@@ -208,3 +208,41 @@ _age_out() {  # _age_out <file> <minutes-ago>
   [ "$status" -eq 0 ]
   [ ! -e /tmp/pwned ]
 }
+
+# ---- ウィンドウタイトル（1窓1タブでタブバーが隠れる環境向け・Issue #51）----
+
+@test "strip_cc_marker removes the Claude Code idle marker" {
+  run strip_cc_marker "✳ CrispPage の完成状況確認"
+  [ "$output" = "CrispPage の完成状況確認" ]
+}
+
+@test "strip_cc_marker removes a braille spinner frame" {
+  run strip_cc_marker "⠐ CrispPage v1 出荷準備"
+  [ "$output" = "CrispPage v1 出荷準備" ]
+}
+
+@test "strip_cc_marker leaves a plain title untouched" {
+  run strip_cc_marker "CrispPage v1 出荷準備"
+  [ "$output" = "CrispPage v1 出荷準備" ]
+}
+
+@test "window_title_apply does nothing while busy (leaves the spinner alone)" {
+  run window_title_apply busy 0 "ABC-123"
+  [ "$status" -eq 0 ]
+}
+
+@test "window_title_apply does nothing for unknown state (fail-open)" {
+  run window_title_apply unknown 0 "ABC-123"
+  [ "$status" -eq 0 ]
+}
+
+@test "window_title_apply is a no-op without an iterm session id (fail-open)" {
+  run window_title_apply idle 0 ""
+  [ "$status" -eq 0 ]
+}
+
+@test "iterm_tty sanitizes its id (no AppleScript injection)" {
+  run iterm_tty '"; do shell script "touch /tmp/pwned2"; --'
+  [ "$status" -eq 0 ]
+  [ ! -e /tmp/pwned2 ]
+}

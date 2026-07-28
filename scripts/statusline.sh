@@ -420,4 +420,7 @@ _iterm_id="$(turn_state_iterm_id "$session_id")"
 # 会話タイトルは複数 terminal を見分ける情報として有用なので残す（Issue #49）。
 if [ -n "$_iterm_id" ] && [ "$_turn_state" != "unknown" ]; then
   iterm_apply_state_prefix "$(state_glyph "$_turn_state" "$bash_count")" "$_iterm_id"
+  # 1窓1タブ運用ではタブバーが隠れてタブ名が見えない。実際に見えるウィンドウタイトルへは
+  # 停止中(idle/wait)のときだけ OSC 2 で前置する（実行中は Claude Code のスピナーに任せる）。
+  window_title_apply "$_turn_state" "$bash_count" "$_iterm_id"
 fi
