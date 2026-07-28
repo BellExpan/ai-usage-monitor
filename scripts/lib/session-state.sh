@@ -120,41 +120,75 @@ turn_banner() {
   esac
 }
 
-# session_title <state> <own_bg_count> <label> → iTerm2 タブタイトル
-#   タブバーを見るだけで（terminal をフォーカスせずに）判別できることが本質。
-session_title() {
-  local state="${1:-unknown}" bg="${2:-0}" label="${3:-claude}"
+# state_glyph <state> <own_bg_count> → タブ名に前置する状態グリフ
+#   ✅ 完了 / 🔵N bg待ち / ⏳ 実行中 / 🔴 要操作（unknown は空 = 何もしない）
+state_glyph() {
+  local state="${1:-unknown}" bg="${2:-0}"
   case "$bg" in ''|*[!0-9]*) bg=0 ;; esac
-  # AppleScript 文字列に埋め込むため、引用符・バックスラッシュ・制御文字を除去
-  label="$(printf '%s' "$label" | LC_ALL=C tr -d '\000-\037"\\')"
-  label="${label:0:24}"
-  [ -n "$label" ] || label="claude"
   case "$state" in
-    busy) printf '⏳ %s' "$label" ;;
-    wait) printf '🔴 %s 要操作' "$label" ;;
-    idle)
-      if [ "$bg" -gt 0 ]; then printf '🔵 %s ⚡%s' "$label" "$bg"
-      else printf '✅ %s' "$label"; fi
-      ;;
-    *) printf '%s' "$label" ;;
+    idle) if [ "$bg" -gt 0 ]; then printf '🔵%s' "$bg"; else printf '✅'; fi ;;
+    busy) printf '⏳' ;;
+    wait) printf '🔴' ;;
+    *)    return 0 ;;
   esac
 }
 
-# iterm_set_title <title> <iterm_session_id>
-#   /dev/tty は Claude Code の子プロセスから届かない（制御端末を持たない）ため、
-#   AppleScript で iTerm2 のセッションを id 直指定して更新する。
-iterm_set_title() {
-  local title="${1:-}" isid
-  isid="$(_ss_sanitize_id "${2:-}")"
+# strip_state_prefix <name> → 既に付いている状態グリフを除去（多重付与の防止）
+strip_state_prefix() {
+  printf '%s' "${1:-}" | sed -E 's/^(✅|🔵[0-9]*|⏳|🔴)[[:space:]]*//'
+}
+
+# strip_job_suffix <name> → iTerm が表示時に付ける末尾 " (job名)" を除去
+#   name を読んで書き戻す際、これを消さないと "(caffeinate) (caffeinate)" と多重化する。
+strip_job_suffix() {
+  printf '%s' "${1:-}" | sed -E 's/[[:space:]]+\([A-Za-z0-9_.:-]+\)$//'
+}
+
+# iterm_get_name <iterm_session_id> → 現在のタブ名（取得できなければ空）
+iterm_get_name() {
+  local isid
+  isid="$(_ss_sanitize_id "${1:-}")"
   [ -n "$isid" ] || return 0
-  [ -n "$title" ] || return 0
   [ -x /usr/bin/osascript ] || return 0
   /usr/bin/osascript -e "tell application \"iTerm2\"
     repeat with w in windows
       repeat with t in tabs of w
         repeat with s in sessions of t
+          if id of s is \"$isid\" then return name of s
+        end repeat
+      end repeat
+    end repeat
+    return \"\"
+  end tell" 2>/dev/null
+}
+
+# iterm_apply_state_prefix <glyph> <iterm_session_id>
+#   Claude Code 自身がタブ名（会話の要約）を随時上書きするため、
+#   「置き換え」ではなく「前置」し、毎回**実際のタブ名**を読んでから判断する。
+#   自分が最後に書いた値をキャッシュ比較する方式だと、外部上書き後に
+#   「変化なし」と誤判定して二度と復元しない（Issue #49 の真因）。
+iterm_apply_state_prefix() {
+  local glyph="${1:-}" isid cur base want
+  isid="$(_ss_sanitize_id "${2:-}")"
+  [ -n "$glyph" ] || return 0
+  [ -n "$isid" ] || return 0
+  cur="$(iterm_get_name "$isid")"
+  [ -n "$cur" ] || return 0
+  base="$(strip_job_suffix "$cur")"
+  base="$(strip_state_prefix "$base")"
+  [ -n "$base" ] || return 0
+  want="${glyph} ${base}"
+  # 既に望む形なら osascript を呼ばない（毎 refresh の無駄打ち回避）
+  [ "$(strip_job_suffix "$cur")" = "$want" ] && return 0
+  # AppleScript 文字列に埋めるため引用符・バックスラッシュ・制御文字を除去
+  want="$(printf '%s' "$want" | LC_ALL=C tr -d '\000-\037"\\')"
+  [ -n "$want" ] || return 0
+  /usr/bin/osascript -e "tell application \"iTerm2\"
+    repeat with w in windows
+      repeat with t in tabs of w
+        repeat with s in sessions of t
           if id of s is \"$isid\" then
-            set name of s to \"$title\"
+            set name of s to \"$want\"
             return
           end if
         end repeat
@@ -162,20 +196,4 @@ iterm_set_title() {
     end repeat
   end tell" >/dev/null 2>&1 || true
   return 0
-}
-
-# iterm_set_title_if_changed <title> <iterm_session_id>
-#   statusline は数秒ごとに走るため、変化時のみ osascript を呼ぶ（~230ms を毎回払わない）。
-iterm_set_title_if_changed() {
-  local title="${1:-}" isid dir cache prev
-  isid="$(_ss_sanitize_id "${2:-}")"
-  [ -n "$isid" ] || return 0
-  [ -n "$title" ] || return 0
-  dir="$(_ss_state_dir)"
-  mkdir -p "$dir" 2>/dev/null || return 0
-  cache="$dir/title-${isid}"
-  prev="$(cat "$cache" 2>/dev/null || true)"
-  [ "$prev" = "$title" ] && return 0
-  printf '%s' "$title" > "$cache" 2>/dev/null || true
-  iterm_set_title "$title" "$isid"
 }

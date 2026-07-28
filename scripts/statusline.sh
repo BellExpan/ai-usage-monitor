@@ -414,7 +414,8 @@ line3="${line3}${bash_rows}${ci_rows}"
 #   変化時のみ osascript を呼ぶので、通常の refresh には追加コストが乗らない。
 _iterm_id="$(turn_state_iterm_id "$session_id")"
 [ -z "$_iterm_id" ] && _iterm_id="${ITERM_SESSION_ID:-}"   # prefix 剥がし + サニタイズは lib 側の入口で行う
+# Claude Code 自身がタブ名（会話の要約）を管理しているため、置き換えず前置する。
+# 会話タイトルは複数 terminal を見分ける情報として有用なので残す（Issue #49）。
 if [ -n "$_iterm_id" ] && [ "$_turn_state" != "unknown" ]; then
-  iterm_set_title_if_changed \
-    "$(session_title "$_turn_state" "$bash_count" "${cwd##*/}")" "$_iterm_id"
+  iterm_apply_state_prefix "$(state_glyph "$_turn_state" "$bash_count")" "$_iterm_id"
 fi

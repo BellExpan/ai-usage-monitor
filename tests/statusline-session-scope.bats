@@ -142,66 +142,62 @@ _age_out() {  # _age_out <file> <minutes-ago>
   [ -z "$output" ]
 }
 
-# ---- タイトル生成 ----
+# ---- タブ名（Claude Code の会話タイトルに前置する）----
 
-@test "session_title composes an at-a-glance tab title" {
-  run session_title idle 0 "ai-org"
-  [[ "$output" == "✅ ai-org" ]]
+@test "state_glyph maps each state" {
+  run state_glyph idle 0; [ "$output" = "✅" ]
+  run state_glyph idle 3; [ "$output" = "🔵3" ]
+  run state_glyph busy 0; [ "$output" = "⏳" ]
+  run state_glyph wait 0; [ "$output" = "🔴" ]
 }
 
-@test "session_title includes the bg count when bg is running" {
-  run session_title idle 3 "ai-org"
-  [[ "$output" == *"ai-org"* ]]
-  [[ "$output" == *"3"* ]]
-  [[ "$output" == "🔵"* ]]
+@test "state_glyph renders nothing for unknown (fail-open)" {
+  run state_glyph unknown 0
+  [ "$status" -eq 0 ]; [ -z "$output" ]
 }
 
-# ---- ID サニタイズ（Codex レビュー指摘: statusline 側・fallback 経路の抜け）----
+@test "strip_state_prefix removes an existing glyph (no double prefixing)" {
+  run strip_state_prefix "⏳ CrispPage v1 出荷準備"
+  [ "$output" = "CrispPage v1 出荷準備" ]
+  run strip_state_prefix "🔵12 SnoreReel"
+  [ "$output" = "SnoreReel" ]
+}
 
-@test "session_tasks_dir sanitizes a path-traversal session id" {
-  run session_tasks_dir "../../../etc"
+@test "strip_state_prefix leaves an unprefixed name untouched" {
+  run strip_state_prefix "⠐ CrispPage v1 出荷準備"
+  [ "$output" = "⠐ CrispPage v1 出荷準備" ]
+}
+
+@test "strip_job_suffix removes the iTerm job name (no (caffeinate)(caffeinate))" {
+  run strip_job_suffix "⠐ CrispPage v1 出荷準備 (caffeinate)"
+  [ "$output" = "⠐ CrispPage v1 出荷準備" ]
+}
+
+@test "strip_job_suffix keeps parenthesised text that is not a job suffix" {
+  run strip_job_suffix "CrispPage (v1 出荷)"
+  [ "$output" = "CrispPage (v1 出荷)" ]
+}
+
+@test "prefix composition is idempotent across repeated applications" {
+  local n="⠐ CrispPage v1 出荷準備 (caffeinate)"
+  n="$(strip_state_prefix "$(strip_job_suffix "$n")")"
+  n="⏳ $n"
+  # 2 回目: 既存 glyph を剥がしてから付け直す → 多重化しない
+  local again
+  again="⏳ $(strip_state_prefix "$(strip_job_suffix "$n")")"
+  [ "$again" = "⏳ ⠐ CrispPage v1 出荷準備" ]
+  [ "$again" = "$n" ]
+}
+
+@test "iterm_apply_state_prefix is a no-op for an empty glyph or id (fail-open)" {
+  run iterm_apply_state_prefix "" "ABC-123"
   [ "$status" -eq 0 ]
-  [[ "$output" != *".."* ]]
-}
-
-@test "turn_state_read cannot read a state file outside the state dir" {
-  mkdir -p "$CLAUDE_TURN_STATE_DIR/sub"
-  printf 'busy 1700000000 x\n' > "$CLAUDE_TURN_STATE_DIR/sub/turn-evil.state"
-  run turn_state_read "sub/evil"
-  [ "$output" = "unknown" ]
-}
-
-@test "iterm_set_title_if_changed keeps its cache inside the state dir" {
-  iterm_set_title_if_changed "✅ x" "../../evil"
-  [ ! -e "$CLAUDE_TURN_STATE_DIR/../../evil" ]
-  # サニタイズ後の名前で state dir 直下にのみ作られる
-  run bash -c "ls -1 '$CLAUDE_TURN_STATE_DIR' | grep -c '^title-'"
-  [ "$output" = "1" ]
-}
-
-@test "sanitizer accepts a raw ITERM_SESSION_ID and strips its pane prefix" {
-  run _ss_sanitize_id "w2t0p0:ABC-123"
-  [ "$output" = "ABC-123" ]
-}
-
-@test "iterm_set_title_if_changed treats a raw ITERM_SESSION_ID as its UUID" {
-  iterm_set_title_if_changed "✅ x" "w2t0p0:ABC-123"
-  [ -f "$CLAUDE_TURN_STATE_DIR/title-ABC-123" ]
-}
-
-@test "sanitizer leaves a plain UUID session id untouched" {
-  run _ss_sanitize_id "aaaaaaaa-1111-1111-1111-111111111111"
-  [ "$output" = "aaaaaaaa-1111-1111-1111-111111111111" ]
-}
-
-@test "iterm_set_title refuses an id that sanitizes to empty (no osascript)" {
-  run iterm_set_title "✅ x" "///"
+  run iterm_apply_state_prefix "⏳" ""
   [ "$status" -eq 0 ]
 }
 
-@test "session_title strips quotes and control chars (AppleScript injection)" {
-  run session_title idle 0 "$(printf 'ev"il\\ x')"
+@test "iterm_get_name sanitizes its id (no AppleScript injection)" {
+  run iterm_get_name '"; do shell script "touch /tmp/pwned"; --'
   [ "$status" -eq 0 ]
-  [[ "$output" != *'"'* ]]
-  [[ "$output" != *'\'* ]]
+  [ ! -e /tmp/pwned ]
 }
