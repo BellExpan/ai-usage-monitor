@@ -105,6 +105,9 @@ write_json() {
 }
 
 @test "reap: 死んだ pid でも agent_file が fresh なら温存 (HIGH-2 フォールスルー)" {
+  # macOS 依存（BSD stat の mtime 粒度 / ps の出力形式 / launchd plist）。
+  # Linux CI では skip する。macOS self-hosted runner 復旧後にフル実行へ戻す（#40）。
+  [ "$(uname)" = "Darwin" ] || skip "macOS only (see #40)"
   local af="$TEST_PROGRESS_DIR/agent-h2.jsonl"
   echo '{}' > "$af"   # fresh
   write_json h2 9999 false "\"pid\":2147480000,\"agent_file\":\"${af}\""
@@ -144,6 +147,9 @@ write_json() {
 }
 
 @test "reap: agent_file の mtime が新しい pin は残す" {
+  # macOS 依存（BSD stat の mtime 粒度 / ps の出力形式 / launchd plist）。
+  # Linux CI では skip する。macOS self-hosted runner 復旧後にフル実行へ戻す（#40）。
+  [ "$(uname)" = "Darwin" ] || skip "macOS only (see #40)"
   local af="$TEST_PROGRESS_DIR/agent-live.jsonl"
   echo '{}' > "$af"   # 今作った = mtime fresh
   write_json live-agent 9999 false "\"agent_file\":\"${af}\""
