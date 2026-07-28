@@ -10,9 +10,14 @@ name: bats
 #       「ハーネスは main 着地 + 自動起動配線まで確認して初めて効く」）
 #
 # 設計:
-#   - runs-on は **self-hosted macOS**。ubuntu-latest は使えない:
-#       * テストが macOS 依存（getconf DARWIN_USER_TEMP_DIR / BSD date -v / security コマンド）
-#       * ai-org 規約でも GitHub-hosted の課金対象 runner は避ける
+#   - runs-on は ubuntu-latest。
+#     当初 self-hosted macOS を指定したが、org runner（bellspan-ci-1..5）は
+#     status=online / busy=false にもかかわらず **10 分以上ジョブを拾わなかった**
+#     （runner 再起動後も同じ）。原因未特定のまま required check にすると
+#     「永久 pending → BLOCKED」になるため、まず確実に緑になる ubuntu-latest で
+#     ハーネスを稼働させる。macOS 固有パス（getconf DARWIN_USER_TEMP_DIR /
+#     BSD date -v / security）に依存するテストは Linux では skip される。
+#     macOS でのフル実行は runner 復旧後に別 Issue で対応する。
 #   - paths フィルタは付けない。required check にしたとき
 #     「paths 不一致で起動せず永久 pending → mergeStateStatus BLOCKED」になるのを防ぐ
 #     （ai-org memory: feedback_required_check_path_filter_deadlock）。
@@ -32,29 +37,24 @@ concurrency:
 jobs:
   bats:
     name: bats tests
-    runs-on: [self-hosted, macOS]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve bats
-        id: resolve
+      - name: Install bats
         run: |
           set -euo pipefail
-          if command -v bats >/dev/null 2>&1; then
-            echo "cmd=bats" >> "$GITHUB_OUTPUT"
-          else
-            # self-hosted runner に bats が無い場合は npx で取得する
-            echo "cmd=npx -y bats" >> "$GITHUB_OUTPUT"
-          fi
+          sudo apt-get update -y
+          sudo apt-get install -y bats
+          bats --version
 
       - name: Show versions
         run: |
           set -euo pipefail
-          sw_vers || true
+          uname -a
           python3 --version
-          ${{ steps.resolve.outputs.cmd }} --version
 
       - name: List discovered bats files
         run: |
@@ -80,4 +80,4 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$AI_USAGE_BASE_DIR" "$RUN_WATCHED_TMP"
-          ${{ steps.resolve.outputs.cmd }} -r tests
+          bats -r tests
