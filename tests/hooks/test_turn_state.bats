@@ -57,12 +57,14 @@ _state_of() { LC_ALL=C awk 'NR==1{print $1}' "$CLAUDE_TURN_STATE_DIR/turn-$SID.s
 }
 
 @test "repeated same state does not rewrite the file (PreToolUse cost guard)" {
+  # 書き込みのたびに 2 列目の epoch が更新されるため、epoch 据え置き＝再書き込みなし。
+  # stat の書式指定は BSD/GNU で非互換なので、ファイル内容で判定する（Linux CI でも動く）。
   printf '%s' "$JSON" | bash "$HOOK" busy
   local before after
-  before="$(stat -f%m "$CLAUDE_TURN_STATE_DIR/turn-$SID.state")"
+  before="$(LC_ALL=C awk 'NR==1{print $2}' "$CLAUDE_TURN_STATE_DIR/turn-$SID.state")"
   sleep 1
   printf '%s' "$JSON" | bash "$HOOK" busy
-  after="$(stat -f%m "$CLAUDE_TURN_STATE_DIR/turn-$SID.state")"
+  after="$(LC_ALL=C awk 'NR==1{print $2}' "$CLAUDE_TURN_STATE_DIR/turn-$SID.state")"
   [ "$before" = "$after" ]
 }
 

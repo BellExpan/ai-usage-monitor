@@ -54,6 +54,10 @@ _run_statusline() {
 }
 
 @test "E2E: turn ended with its own bg → shows it will auto-resume" {
+  # statusline.sh の bg 行生成は `stat -f '%m %N'`（BSD 専用書式）に依存するため、
+  # Linux CI では bash_count が 0 になり 🔵 判定に到達しない。本 repo は macOS 専用（README 冒頭）。
+  # Linux CI では skip する。macOS self-hosted runner 復旧後にフル実行へ戻す（#40）。
+  [ "$(uname)" = "Darwin" ] || skip "macOS only (see #40)"
   _set_turn idle
   _own_bg b111; _own_bg b222
   run _run_statusline
