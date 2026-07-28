@@ -439,7 +439,7 @@ AI_USAGE_BASE_DIR=/tmp/aum-test bash scripts/usage-source-selfcheck.sh
 
 ## テスト
 
-bats（bash 用テストフレームワーク）で **15 ファイル・185 テスト**を網羅している。
+bats（bash 用テストフレームワーク）で **27 ファイル・327 テスト**を網羅している。
 
 ```bash
 brew install bats-core   # 未インストールの場合
@@ -458,6 +458,10 @@ bats tests/hooks/  # フックのテストのみ
 | `ai_org_progress_*.bats`（8 ファイル） | 93 | 進捗 pin の write/complete/lifecycle・**liveness 死活判定**・再帰集約・stale 孤児 reap・入力検証 |
 | `find_active_root_pin.bats` | 15 | アクティブな root pin の探索 |
 | `hooks/test_enforce_subagent_progress.bats` | 28 | subagent dispatch の進捗 pin 強制フック |
+| `statusline-session-scope.bats` | 20 | bg 集計のセッションスコープ・ターン状態読み取り・バナー/タブタイトル生成・AppleScript 注入除去 (#42) |
+| `statusline-state-e2e.bats` | 7 | 実 statusline を本物の stdin JSON で走らせ、✅完了 / 🔵bg / ⏳実行中 / 🔴要操作 と「他term」分離を検証 (#42) |
+| `hooks/test_turn_state.bats` | 10 | ターン状態 hook の記録・冪等書き込み・パストラバーサル防御・fail-open (#42) |
+| `settings-json-atomic.bats` | 6 | settings.json の原子的書き込み・symlink 透過・mode 保持・失敗時の無傷性 (#42) |
 
 全テストは `AI_USAGE_BASE_DIR` / 隔離 PROGRESS_DIR のサンドボックスで動作し、本番キャッシュには触れない。
 
@@ -471,6 +475,8 @@ ai-usage-monitor/
 │   ├── lib/
 │   │   ├── cache-path.sh  # キャッシュパス正典（AI_USAGE_DIR / CACHE_FILE / LOCK_DIR / init_cache_dir）
 │   │   ├── bg-status.sh   # バックグラウンド進捗の状態関数（set/clear/render）
+│   │   ├── session-state.sh  # セッション単位の bg 集計 + ターン状態 + iTerm2 タブタイトル（#42）
+│   │   ├── settings_json.py  # ~/.claude/settings.json の原子的書き込み（symlink/mode 保持・#42）
 │   │   └── parse_codex_rate_limits.py  # Codex rate_limits パーサ（null マーカー skip・残量と resets_at 抽出）
 │   ├── cache-update.sh           # キャッシュを5分ごと更新（launchd から呼ばれる）
 │   ├── usage-source-selfcheck.sh # 外部データ源の契約ドリフト検知
@@ -486,11 +492,13 @@ ai-usage-monitor/
 ├── hooks/
 │   ├── session-start.sh              # Claude Code SessionStart フック（使用量サマリ表示）
 │   ├── auto-pin-subagent.sh          # subagent dispatch 直後に進捗 pin を代行 write（liveness anchor 付与）
-│   └── enforce-subagent-progress.sh  # dispatch prompt に進捗 pin が無ければ弾く強制フック
-├── tests/                    # bats テスト 15 ファイル・185 テスト
+│   ├── enforce-subagent-progress.sh  # dispatch prompt に進捗 pin が無ければ弾く強制フック
+│   └── turn-state.sh                 # ターン状態（実行中/要操作/終了）を記録（statusline とタブタイトルの単一情報源・#42）
+├── tests/                    # bats テスト 27 ファイル・327 テスト
 │   ├── session-start-lock.bats / statusline-bg-status.bats / codex-rate-limits-parser.bats
+│   ├── statusline-session-scope.bats / statusline-state-e2e.bats / settings-json-atomic.bats
 │   ├── ai_org_progress_*.bats（8 ファイル）/ find_active_root_pin.bats
-│   └── hooks/test_enforce_subagent_progress.bats
+│   └── hooks/test_enforce_subagent_progress.bats / hooks/test_turn_state.bats
 ├── launchd/
 │   ├── com.aiorg.usage-monitor.plist     # 使用量キャッシュ更新ジョブ（5分毎）
 │   ├── com.aiorg.usage-selfcheck.plist   # データ源 selfcheck（日次）
