@@ -144,6 +144,22 @@ _main() {
   native_events_24h=$(_int "$(printf '%s\n' "$native_out" | awk -F= '$1=="EVENTS_24H"{print $2; exit}')")
   cache_cdx_today=$(_int "$(_kv CDX_24H_TOKENS "$CACHE_PATH")")
 
+  # cache 自体の鮮度ゲート（PR #38 レビュー 3 回目の指摘）:
+  # stale フラグが 0 でも、cache-update が今日まだ走っていない／sleep 復帰直後／
+  # launchd の順序差で「前日生成の cache」を読むことがある。その場合
+  # 「昨日の today bucket」vs「今日の native」を比較して誤発火する。
+  # GENERATED_AT の日付が今日でない、または TIMESTAMP が古い(既定 2h 超)なら
+  # トークン突き合わせを行わない（rate limit 系の判定は継続する）。
+  local cache_gen_day cache_ts now_ts cache_token_comparable
+  cache_gen_day=$(_kv GENERATED_AT "$CACHE_PATH" | cut -dT -f1)
+  cache_ts=$(_int "$(_kv TIMESTAMP "$CACHE_PATH")")
+  now_ts=$(date +%s)
+  cache_token_comparable=1
+  [ "$cache_gen_day" = "$TODAY" ] || cache_token_comparable=0
+  if [ "$cache_ts" -gt 0 ] && [ $(( now_ts - cache_ts )) -gt "${SELFCHECK_CACHE_MAX_AGE:-7200}" ]; then
+    cache_token_comparable=0
+  fi
+
   # cache のトークン値が stale（取得失敗で前回値を保持した状態）なら、
   # それは「昨日の today bucket」でありうる。today 基準の native と比較すると
   # 必ず乖離し token_source_mismatch が誤発火する（PR #38 レビュー指摘）。
@@ -152,13 +168,13 @@ _main() {
   local cdx_tokens_stale
   cdx_tokens_stale=$(_int "$(_kv CDX_TOKENS_STALE "$CACHE_PATH")")
 
-  if [ "$cdx_tokens_stale" = "1" ]; then
-    :  # stale の間はトークン突き合わせを行わない
+  if [ "$cdx_tokens_stale" = "1" ] || [ "$cache_token_comparable" = "0" ]; then
+    :  # stale / cache が古い間はトークン突き合わせを行わない
   elif [ "$native_events_today" -gt 0 ] && [ "$cache_cdx_today" -eq 0 ]; then
     _add_reason "codex_tokens_zero_despite_activity"
   fi
 
-  if [ "$cdx_tokens_stale" = "1" ]; then
+  if [ "$cdx_tokens_stale" = "1" ] || [ "$cache_token_comparable" = "0" ]; then
     :  # 同上
   elif { [ "$native_today" -eq 0 ] && [ "$cache_cdx_today" -gt 0 ]; } || \
      { [ "$native_today" -gt 0 ] && [ "$cache_cdx_today" -eq 0 ]; }; then
@@ -193,7 +209,10 @@ _main() {
   # Claude 側も対称に扱う: stale（前回値保持）なら「今日 0」ではないので判定しない
   local cla_tokens_stale
   cla_tokens_stale=$(_int "$(_kv CLA_TOKENS_STALE "$CACHE_PATH")")
-  [ "$cla_tokens_stale" != "1" ] && [ "$cla_activity" -gt 0 ] && [ "$cla_tokens" -eq 0 ] \
+  # CLA_TOKENS_STALE は daily 由来のみ（blocks 失敗は CLA_BLOCKS_STALE で別管理）。
+  # blocks だけ失敗したときに 24h 判定まで殺すと false negative になるため。
+  [ "$cla_tokens_stale" != "1" ] && [ "$cache_token_comparable" = "1" ] \
+    && [ "$cla_activity" -gt 0 ] && [ "$cla_tokens" -eq 0 ] \
     && _add_reason "claude_tokens_zero_despite_activity"
 
   _check_versions

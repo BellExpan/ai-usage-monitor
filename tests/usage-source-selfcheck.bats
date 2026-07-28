@@ -24,7 +24,11 @@ teardown() {
 }
 
 write_cache() {
+  # 鮮度ゲート（GENERATED_AT が今日 / TIMESTAMP が新しい）を満たす cache を書く。
+  # ゲートを満たさないと token 突き合わせ自体が skip され、判定テストが素通りする。
   cat > "$CACHE" <<EOF
+TIMESTAMP=$NOW
+GENERATED_AT=${TODAY}T12:00:00+0900
 CLA_OAUTH_FRESH=${1:-1}
 CLA_24H_TOKENS=${2:-500}
 CDX_24H_TOKENS=${3:-1200}
@@ -133,6 +137,8 @@ codex_line() {
 
 write_cache_stale() {
   cat > "$CACHE" <<EOF
+TIMESTAMP=$NOW
+GENERATED_AT=${TODAY}T12:00:00+0900
 CLA_OAUTH_FRESH=1
 CLA_24H_TOKENS=${1:-500}
 CDX_24H_TOKENS=${2:-0}
@@ -162,4 +168,60 @@ EOF
   run bash "$SELF_CHECK" --cache "$CACHE"
   [ "$status" -eq 0 ]
   [[ "$output" == *"codex_tokens_zero_despite_activity"* ]]
+}
+
+# --- PR #38 レビュー指摘（3回目）: cache 鮮度ゲート / stale フラグの分離 ---
+
+write_cache_dated() {
+  # $1: GENERATED_AT の日付 / $2: TIMESTAMP / $3: CDX_24H_TOKENS
+  cat > "$CACHE" <<EOF2
+TIMESTAMP=${2}
+GENERATED_AT=${1}T12:00:00+0900
+CLA_OAUTH_FRESH=1
+CLA_24H_TOKENS=500
+CDX_24H_TOKENS=${3}
+EOF2
+}
+
+@test "前日生成の cache なら token 突き合わせをしない（誤発火防止）" {
+  write_cache_dated "$YESTERDAY" "$(( NOW - 86400 ))" 0
+  codex_line 1200 1 > "$HOME/.codex/sessions/2026/07/28/oldcache.jsonl"
+  run bash "$SELF_CHECK" --cache "$CACHE"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"codex_tokens_zero_despite_activity"* ]]
+  [[ "$output" != *"token_source_mismatch"* ]]
+}
+
+@test "当日生成でも TIMESTAMP が古すぎる cache なら token 突き合わせをしない" {
+  write_cache_dated "$TODAY" "$(( NOW - 100000 ))" 0
+  codex_line 1200 1 > "$HOME/.codex/sessions/2026/07/28/staleTs.jsonl"
+  run bash "$SELF_CHECK" --cache "$CACHE"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"codex_tokens_zero_despite_activity"* ]]
+}
+
+@test "当日生成かつ fresh な cache なら従来通り検知する（ゲートが効きすぎない回帰防止）" {
+  write_cache_dated "$TODAY" "$NOW" 0
+  codex_line 1200 1 > "$HOME/.codex/sessions/2026/07/28/freshcache.jsonl"
+  run bash "$SELF_CHECK" --cache "$CACHE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"codex_tokens_zero_despite_activity"* ]]
+}
+
+@test "CLA_BLOCKS_STALE=1 だけでは Claude 24h 判定を殺さない（false negative 防止）" {
+  cat > "$CACHE" <<EOF2
+TIMESTAMP=$NOW
+GENERATED_AT=${TODAY}T12:00:00+0900
+CLA_OAUTH_FRESH=1
+CLA_24H_TOKENS=0
+CDX_24H_TOKENS=1200
+CLA_BLOCKS_STALE=1
+CLA_TOKENS_STALE=0
+EOF2
+  mkdir -p "$HOME/.claude/projects/x"
+  printf '{"timestamp":"%sT12:00:00.000Z"}\n' "$TODAY" > "$HOME/.claude/projects/x/a.jsonl"
+  codex_line 1200 1 > "$HOME/.codex/sessions/2026/07/28/blocksstale.jsonl"
+  run bash "$SELF_CHECK" --cache "$CACHE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude_tokens_zero_despite_activity"* ]]
 }

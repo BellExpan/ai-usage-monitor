@@ -135,7 +135,13 @@ CLA_5H_RESETS_AT_EPOCH=0
 CLA_7D_RESETS_AT_EPOCH=0
 CLA_OAUTH_FRESH=0
 CLA_VALUES_STALE=0
-CLA_TOKENS_STALE=0
+# stale フラグは取得元ごとに分ける。
+# blocks(5h ブロック) と daily(日次トークン) は別 API 呼び出しであり、
+# blocks だけ失敗したときに daily 由来の 24h 判定まで殺すと、
+# 「本来検知すべき claude_tokens_zero_despite_activity」を false negative にする
+#（PR #38 レビュー 3 回目の指摘）。
+CLA_TOKENS_STALE=0        # daily 由来（24h/7d トークン）が stale
+CLA_BLOCKS_STALE=0        # blocks 由来（5h ブロック）が stale
 CDX_TOKENS_STALE=0
 
 # Keychain から OAuth access token を取得（security コマンド経由）
@@ -252,7 +258,8 @@ if [ "$CLA_BLOCKS_OK" != "1" ] && [ "$OLD_CACHE_EXISTS" = "1" ]; then
   CLA_5H_TOKENS=$(old_or_current CLA_5H_TOKENS "$CLA_5H_TOKENS")
   CLA_5H_RESET_AT=$(old_or_current CLA_5H_RESET_AT "$CLA_5H_RESET_AT")
   if any_old_cache_restorable CLA_5H_TOKENS CLA_5H_RESET_AT; then
-    CLA_TOKENS_STALE=1
+    # blocks 由来のみ stale。daily 由来の 24h 判定には影響しない
+    CLA_BLOCKS_STALE=1
   fi
 fi
 
@@ -418,6 +425,7 @@ fi
   echo "CLA_OAUTH_FRESH=$CLA_OAUTH_FRESH"
   echo "CLA_VALUES_STALE=$CLA_VALUES_STALE"
   echo "CLA_TOKENS_STALE=$CLA_TOKENS_STALE"
+  echo "CLA_BLOCKS_STALE=$CLA_BLOCKS_STALE"
   echo "CDX_TOKENS_STALE=$CDX_TOKENS_STALE"
   echo "CLA_7D_HOURS_UNTIL_RESET=$CLA_7D_HOURS_UNTIL_RESET"
   echo "CLA_5H_USED_PCT=$CLA_5H_USED_PCT"
