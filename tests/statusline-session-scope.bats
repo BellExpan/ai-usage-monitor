@@ -88,6 +88,63 @@ _age_out() {  # _age_out <file> <minutes-ago>
   [ "$output" = "0" ]
 }
 
+# ---- 生きている bg の判定（タブ/バナー状態用・Issue #53）----
+# session_bg_count（表示用・鮮度のみ）と違い、agent bg と沈黙中の bash bg を数える。
+
+@test "session_live_bg_count counts a running agent (symlink to a freshly written jsonl)" {
+  # Agent bg の .output は subagents/*.jsonl への symlink（17文字id）。稼働中は jsonl が追記され続ける
+  : > "$PROJ/$OWN/agent-a1.jsonl"
+  ln -s "$PROJ/$OWN/agent-a1.jsonl" "$PROJ/$OWN/tasks/a123456789abcdef0.output"
+  run session_live_bg_count "$OWN"
+  [ "$status" -eq 0 ]
+  [ "$output" = "1" ]
+}
+
+@test "session_live_bg_count ignores a finished agent (stale jsonl target)" {
+  : > "$PROJ/$OWN/agent-a1.jsonl"
+  _age_out "$PROJ/$OWN/agent-a1.jsonl" 60
+  ln -s "$PROJ/$OWN/agent-a1.jsonl" "$PROJ/$OWN/tasks/a123456789abcdef0.output"
+  run session_live_bg_count "$OWN"
+  [ "$output" = "0" ]
+}
+
+@test "session_live_bg_count counts a silent-but-alive bash bg (stale mtime, still open)" {
+  # codex 高 reasoning / run_watched は 5 分以上無出力になる。プロセスが .output を
+  # 掴んでいる限り生存と判定する（lsof）— 2026-07-31 オーナー実観測の真因その2。
+  sleep 60 > "$PROJ/$OWN/tasks/b1111111.output" &
+  HOLD_PID=$!
+  _age_out "$PROJ/$OWN/tasks/b1111111.output" 60
+  run session_live_bg_count "$OWN"
+  kill "$HOLD_PID" 2>/dev/null || true
+  [ "$output" = "1" ]
+}
+
+@test "session_live_bg_count is 0 when outputs are stale and closed (finished tasks linger)" {
+  : > "$PROJ/$OWN/tasks/b1111111.output"
+  _age_out "$PROJ/$OWN/tasks/b1111111.output" 60
+  run session_live_bg_count "$OWN"
+  [ "$output" = "0" ]
+}
+
+@test "session_live_bg_count degrades to freshness-only without lsof (fail-open)" {
+  export CLAUDE_SS_LSOF="/nonexistent/lsof-$$"
+  : > "$PROJ/$OWN/tasks/bfresh11.output"
+  sleep 60 > "$PROJ/$OWN/tasks/b1111111.output" &
+  HOLD_PID=$!
+  _age_out "$PROJ/$OWN/tasks/b1111111.output" 60
+  run session_live_bg_count "$OWN"
+  kill "$HOLD_PID" 2>/dev/null || true
+  unset CLAUDE_SS_LSOF
+  [ "$status" -eq 0 ]
+  [ "$output" = "1" ]
+}
+
+@test "session_live_bg_count returns 0 for an empty session id (fail-open)" {
+  run session_live_bg_count ""
+  [ "$status" -eq 0 ]
+  [ "$output" = "0" ]
+}
+
 # ---- ターン状態 ----
 
 @test "turn_state_read returns the recorded state" {
@@ -122,8 +179,9 @@ _age_out() {  # _age_out <file> <minutes-ago>
 
 @test "turn_banner: idle with bg means it will auto-resume" {
   run turn_banner idle 2
-  [[ "$output" == "🔵"* ]]
+  [[ "$output" == "🔶"* ]]
   [[ "$output" == *"2"* ]]
+  [[ "$output" == *"作業中"* ]]
 }
 
 @test "turn_banner: busy means the turn is running" {
@@ -146,7 +204,7 @@ _age_out() {  # _age_out <file> <minutes-ago>
 
 @test "state_glyph maps each state" {
   run state_glyph idle 0; [ "$output" = "✅" ]
-  run state_glyph idle 3; [ "$output" = "🔵3" ]
+  run state_glyph idle 3; [ "$output" = "🔶3" ]
   run state_glyph busy 0; [ "$output" = "⏳" ]
   run state_glyph wait 0; [ "$output" = "🔴" ]
 }
@@ -159,6 +217,11 @@ _age_out() {  # _age_out <file> <minutes-ago>
 @test "strip_state_prefix removes an existing glyph (no double prefixing)" {
   run strip_state_prefix "⏳ CrispPage v1 出荷準備"
   [ "$output" = "CrispPage v1 出荷準備" ]
+  run strip_state_prefix "🔶2 SnoreReel"
+  [ "$output" = "SnoreReel" ]
+}
+
+@test "strip_state_prefix still removes the legacy blue glyph (migration)" {
   run strip_state_prefix "🔵12 SnoreReel"
   [ "$output" = "SnoreReel" ]
 }

@@ -336,12 +336,22 @@ done < <(pgrep -f "/tmp/ci_" 2>/dev/null)
 bg_total=$((prog_count + bash_count + ci_count))
 
 # Issue #42: ターン状態バナー。「終わったのか / bg で動いているのか」を先頭で言い切る。
-#   判定に使うのは bash_count（＝自セッションの bg タスク）。prog/ci は元からマシン全体スコープ。
+# Issue #53: 判定は bash_count でなく session_live_bg_count（生きている bg）で行う。
+#   bash_count は (a) agent bg（17文字id の symlink）を数えない (b) 5 分沈黙で 0 になるため、
+#   codex/agent の完了待ちでも「✅ 完了」に転倒していた（2026-07-31 オーナー実観測）。
+#   live 判定は idle のときだけ計算する（busy/wait の表示は bg 数に依存しない。lsof コスト回避）。
 _turn_state="$(turn_state_read "$session_id")"
-_banner="$(turn_banner "$_turn_state" "$bash_count")"
+_live_bg="$bash_count"
+if [ "$_turn_state" = "idle" ]; then
+  _live_bg="$(session_live_bg_count "$session_id")"
+  case "$_live_bg" in ''|*[!0-9]*) _live_bg=0 ;; esac
+  # degrade 経路（session スコープ解決不能）では従来の bash_count を下限にする
+  [ "$_live_bg" -lt "$bash_count" ] && _live_bg="$bash_count"
+fi
+_banner="$(turn_banner "$_turn_state" "$_live_bg")"
 line3=""
 case "$_turn_state" in
-  idle) if [ "$bash_count" -gt 0 ]; then line3="${cyan}${_banner}${reset}  "
+  idle) if [ "$_live_bg" -gt 0 ]; then line3="${cyan}${_banner}${reset}  "
         else line3="${green}${_banner}${reset}  "; fi ;;
   busy) line3="${yellow}${_banner}${reset}  " ;;
   wait) line3="${red}${_banner}${reset}  " ;;
@@ -419,8 +429,9 @@ _iterm_id="$(turn_state_iterm_id "$session_id")"
 # Claude Code 自身がタブ名（会話の要約）を管理しているため、置き換えず前置する。
 # 会話タイトルは複数 terminal を見分ける情報として有用なので残す（Issue #49）。
 if [ -n "$_iterm_id" ] && [ "$_turn_state" != "unknown" ]; then
-  iterm_apply_state_prefix "$(state_glyph "$_turn_state" "$bash_count")" "$_iterm_id"
+  # Issue #53: タブ/ウィンドウタイトルの状態もバナーと同じ「生きている bg」で判定する
+  iterm_apply_state_prefix "$(state_glyph "$_turn_state" "$_live_bg")" "$_iterm_id"
   # 1窓1タブ運用ではタブバーが隠れてタブ名が見えない。実際に見えるウィンドウタイトルへは
   # 停止中(idle/wait)のときだけ OSC 2 で前置する（実行中は Claude Code のスピナーに任せる）。
-  window_title_apply "$_turn_state" "$bash_count" "$_iterm_id"
+  window_title_apply "$_turn_state" "$_live_bg" "$_iterm_id"
 fi

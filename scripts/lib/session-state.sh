@@ -77,6 +77,48 @@ session_other_bg_count() {
   printf '%s' "$diff"
 }
 
+# session_live_bg_count <session_id>
+#   → 「実際に生きている」bg タスク数。タブ/ウィンドウタイトルとバナーの状態判定用（Issue #53）。
+#
+#   session_bg_count（表示行用・鮮度のみ）との違い:
+#     (1) agent bg の .output（subagents/*.jsonl への symlink・~17文字id）も数える。
+#         稼働中の agent は jsonl が追記され続けるため、find -L で実体側の mtime を見る
+#         （symlink 自体の mtime は作成時から変わらない）。
+#     (2) 鮮度切れでも「プロセスが .output を掴んでいる」なら生存と判定する（lsof）。
+#         codex 高 reasoning / run_watched は 5 分以上無出力が常態のため、mtime だけでは
+#         実行中でも 0 になり「✅ 完了」に転倒する（2026-07-31 オーナー実観測の真因）。
+#
+#   コスト: lsof（実測 ~0.5s）は「鮮度切れ .output がある時」だけ実行。呼び出し側は
+#           idle のときだけ呼ぶこと（busy/wait の表示は bg 数に依存しないため不要）。
+#   fail-open: tasks dir 無し → 0、lsof 無し → 鮮度のみ（従来相当）。常に exit 0。
+session_live_bg_count() {
+  local sid="${1:-}" dir mins fresh_n stale lsof_bin open_n
+  dir="$(session_tasks_dir "$sid")"
+  [ -n "$dir" ] || { printf '0'; return 0; }
+  mins="$(_ss_fresh_mins)"
+  # (1) 実体 mtime が新鮮なもの（壊れた symlink は stat 不能で自然に除外される）
+  fresh_n="$(find -L "$dir" -maxdepth 1 -name '*.output' -mmin "-$mins" 2>/dev/null | grep -c .)" || true
+  case "$fresh_n" in ''|*[!0-9]*) fresh_n=0 ;; esac
+  # (2) 鮮度切れだがプロセスが掴んでいるもの（沈黙中の bash bg / codex）。
+  #     完了済み .output は残留するため（実測）、lsof の引数は 40 件で頭打ちにする。
+  stale="$(find -L "$dir" -maxdepth 1 -name '*.output' ! -mmin "-$mins" 2>/dev/null | head -40)"
+  open_n=0
+  if [ -n "$stale" ]; then
+    lsof_bin="${CLAUDE_SS_LSOF:-}"
+    if [ -z "$lsof_bin" ]; then
+      lsof_bin="$(command -v lsof 2>/dev/null || true)"
+      [ -n "$lsof_bin" ] || lsof_bin="/usr/sbin/lsof"
+    fi
+    if [ -x "$lsof_bin" ]; then
+      # -F n = open 中のパスのみ出力。同一ファイルの多重 fd を sort -u で 1 件に潰す
+      open_n="$(printf '%s\n' "$stale" | tr '\n' '\0' \
+        | xargs -0 "$lsof_bin" -F n -- 2>/dev/null | grep '^n' | sort -u | grep -c .)" || true
+      case "$open_n" in ''|*[!0-9]*) open_n=0 ;; esac
+    fi
+  fi
+  printf '%s' "$(( fresh_n + open_n ))"
+}
+
 # turn_state_read <session_id> → busy | wait | idle | unknown
 turn_state_read() {
   local sid f s
@@ -109,7 +151,7 @@ turn_banner() {
   case "$state" in
     idle)
       if [ "$bg" -gt 0 ]; then
-        printf '🔵 bg %s 実行中 — 完了で自動再開' "$bg"
+        printf '🔶 bg %s 作業中 — 完了で自動再開' "$bg"
       else
         printf '✅ 完了 — 入力待ち'
       fi
@@ -121,12 +163,12 @@ turn_banner() {
 }
 
 # state_glyph <state> <own_bg_count> → タブ名に前置する状態グリフ
-#   ✅ 完了 / 🔵N bg待ち / ⏳ 実行中 / 🔴 要操作（unknown は空 = 何もしない）
+#   ✅ 完了 / 🔶N bg作業中 / ⏳ 実行中 / 🔴 要操作（unknown は空 = 何もしない）
 state_glyph() {
   local state="${1:-unknown}" bg="${2:-0}"
   case "$bg" in ''|*[!0-9]*) bg=0 ;; esac
   case "$state" in
-    idle) if [ "$bg" -gt 0 ]; then printf '🔵%s' "$bg"; else printf '✅'; fi ;;
+    idle) if [ "$bg" -gt 0 ]; then printf '🔶%s' "$bg"; else printf '✅'; fi ;;
     busy) printf '⏳' ;;
     wait) printf '🔴' ;;
     *)    return 0 ;;
@@ -134,8 +176,9 @@ state_glyph() {
 }
 
 # strip_state_prefix <name> → 既に付いている状態グリフを除去（多重付与の防止）
+#   🔵 は旧グリフ（→🔶 へ移行・Issue #53）。移行期のタブ名を掃除するため残す。
 strip_state_prefix() {
-  printf '%s' "${1:-}" | sed -E 's/^(✅|🔵[0-9]*|⏳|🔴)[[:space:]]*//'
+  printf '%s' "${1:-}" | sed -E 's/^(✅|🔵[0-9]*|🔶[0-9]*|⏳|🔴)[[:space:]]*//'
 }
 
 # strip_job_suffix <name> → iTerm が表示時に付ける末尾 " (job名)" を除去
