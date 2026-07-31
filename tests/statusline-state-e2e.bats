@@ -15,6 +15,9 @@ setup() {
   # 出力に混入すると状態アサートが偽陽性で落ちるため、HOME を空の一時 dir に分離する。
   FAKE_HOME="$(mktemp -d)"
 
+  # live bg 判定の数秒キャッシュはテスト間で干渉するため無効化
+  export CLAUDE_SS_LIVE_CACHE_SECS=0
+
   OWN="aaaa1111-1111-1111-1111-111111111111"
   OTHER="bbbb2222-2222-2222-2222-222222222222"
   mkdir -p "$CLAUDE_TASKS_ROOT/-proj/$OWN/tasks" "$CLAUDE_TASKS_ROOT/-proj/$OTHER/tasks"
@@ -25,7 +28,7 @@ setup() {
 
 teardown() {
   rm -rf "$CLAUDE_TASKS_ROOT" "$CLAUDE_TURN_STATE_DIR" "$FAKE_HOME"
-  unset CLAUDE_TASKS_ROOT CLAUDE_TURN_STATE_DIR
+  unset CLAUDE_TASKS_ROOT CLAUDE_TURN_STATE_DIR CLAUDE_SS_LIVE_CACHE_SECS
 }
 
 _set_turn() { printf '%s 1700000000 %s\n' "$1" "$FAKE_ITERM" > "$CLAUDE_TURN_STATE_DIR/turn-$OWN.state"; }

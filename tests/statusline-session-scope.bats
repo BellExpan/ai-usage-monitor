@@ -14,6 +14,9 @@ setup() {
   CLAUDE_TASKS_ROOT="$(mktemp -d)"
   CLAUDE_TURN_STATE_DIR="$(mktemp -d)"
 
+  # session_live_bg_count の数秒キャッシュはテストの fs 変更と干渉するため無効化
+  export CLAUDE_SS_LIVE_CACHE_SECS=0
+
   OWN="aaaaaaaa-1111-1111-1111-111111111111"
   OTHER="bbbbbbbb-2222-2222-2222-222222222222"
   PROJ="$CLAUDE_TASKS_ROOT/-Volumes-proj"
@@ -22,7 +25,7 @@ setup() {
 
 teardown() {
   rm -rf "$CLAUDE_TASKS_ROOT" "$CLAUDE_TURN_STATE_DIR"
-  unset CLAUDE_TASKS_ROOT CLAUDE_TURN_STATE_DIR CLAUDE_BG_FRESH_MINS
+  unset CLAUDE_TASKS_ROOT CLAUDE_TURN_STATE_DIR CLAUDE_BG_FRESH_MINS CLAUDE_SS_LIVE_CACHE_SECS
 }
 
 _age_out() {  # _age_out <file> <minutes-ago>
@@ -135,6 +138,53 @@ _age_out() {  # _age_out <file> <minutes-ago>
   run session_live_bg_count "$OWN"
   kill "$HOLD_PID" 2>/dev/null || true
   unset CLAUDE_SS_LSOF
+  [ "$status" -eq 0 ]
+  [ "$output" = "1" ]
+}
+
+@test "session_live_bg_count ignores a read-only holder like tail -f (Codex #54: no 🔶 stick)" {
+  : > "$PROJ/$OWN/tasks/b1111111.output"
+  _age_out "$PROJ/$OWN/tasks/b1111111.output" 60
+  tail -f "$PROJ/$OWN/tasks/b1111111.output" > /dev/null 2>&1 &
+  HOLD_PID=$!
+  sleep 0.3   # tail が fd を開くまで待つ
+  run session_live_bg_count "$OWN"
+  kill "$HOLD_PID" 2>/dev/null || true
+  [ "$output" = "0" ]
+}
+
+@test "session_live_bg_count has no head cap: the 41st+ stale-but-alive bg is still found (Codex #54)" {
+  # 完了済み .output が 44 件残留していても、45 件目の生存 bg を取りこぼさない
+  local i
+  for i in $(seq -w 1 44); do
+    : > "$PROJ/$OWN/tasks/bdead$i.output"
+    _age_out "$PROJ/$OWN/tasks/bdead$i.output" 60
+  done
+  sleep 60 > "$PROJ/$OWN/tasks/bzzalive.output" &
+  HOLD_PID=$!
+  _age_out "$PROJ/$OWN/tasks/bzzalive.output" 60
+  run session_live_bg_count "$OWN"
+  kill "$HOLD_PID" 2>/dev/null || true
+  [ "$output" = "1" ]
+}
+
+@test "session_live_bg_count caches its result for CLAUDE_SS_LIVE_CACHE_SECS (Codex #54: amortize lsof)" {
+  export CLAUDE_SS_LIVE_CACHE_SECS=60
+  run session_live_bg_count "$OWN"
+  [ "$output" = "0" ]
+  : > "$PROJ/$OWN/tasks/bfresh11.output"          # TTL 内の fs 変化はキャッシュが吸収
+  run session_live_bg_count "$OWN"
+  [ "$output" = "0" ]
+  export CLAUDE_SS_LIVE_CACHE_SECS=0              # TTL=0 → 再計算で最新が見える
+  run session_live_bg_count "$OWN"
+  [ "$output" = "1" ]
+}
+
+@test "session_live_bg_count ignores a corrupt cache file (fail-open)" {
+  export CLAUDE_SS_LIVE_CACHE_SECS=60
+  : > "$PROJ/$OWN/tasks/bfresh11.output"
+  printf 'garbage not-a-number\n' > "$CLAUDE_TURN_STATE_DIR/livebg-$OWN.cache"
+  run session_live_bg_count "$OWN"
   [ "$status" -eq 0 ]
   [ "$output" = "1" ]
 }

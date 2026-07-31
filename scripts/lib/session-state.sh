@@ -88,20 +88,40 @@ session_other_bg_count() {
 #         codex 高 reasoning / run_watched は 5 分以上無出力が常態のため、mtime だけでは
 #         実行中でも 0 になり「✅ 完了」に転倒する（2026-07-31 オーナー実観測の真因）。
 #
-#   コスト: lsof（実測 ~0.5s）は「鮮度切れ .output がある時」だけ実行。呼び出し側は
-#           idle のときだけ呼ぶこと（busy/wait の表示は bg 数に依存しないため不要）。
+#   コスト: lsof（実測 ~0.3-0.5s、プロセステーブル走査が支配的でファイル数には非依存）は
+#           「鮮度切れ .output がある時」だけ実行し、結果を数秒キャッシュして償却する
+#           （Codex #54 指摘 3）。呼び出し側は idle のときだけ呼ぶこと
+#           （busy/wait の表示は bg 数に依存しないため不要）。
+#   既知の制約（Codex #54 指摘 4）: fd を保持せず「開く→書く→閉じる」を繰り返す writer が
+#           5 分以上沈黙すると、fresh でも open でも検出できず偽陰性になる。現行の bg 経路
+#           （run_in_background の stdout fd 保持 / agent jsonl の追記継続）はどちらも対象外。
 #   fail-open: tasks dir 無し → 0、lsof 無し → 鮮度のみ（従来相当）。常に exit 0。
 session_live_bg_count() {
   local sid="${1:-}" dir mins fresh_n stale lsof_bin open_n
+  local cache_ttl cache_f now cached c_ts c_n
   dir="$(session_tasks_dir "$sid")"
   [ -n "$dir" ] || { printf '0'; return 0; }
+  # 数秒キャッシュ: idle 中は render のたびに呼ばれるため lsof コストを償却する。
+  # TTL=0 で無効（テスト用）。ファイルは 1 行 "<epoch> <count>"（壊れていたら再計算）。
+  cache_ttl="${CLAUDE_SS_LIVE_CACHE_SECS:-10}"
+  case "$cache_ttl" in ''|*[!0-9]*) cache_ttl=10 ;; esac
+  cache_f="$(_ss_state_dir)/livebg-$(_ss_sanitize_id "$sid").cache"
+  now="$(date +%s)"
+  if [ "$cache_ttl" -gt 0 ] && [ -f "$cache_f" ]; then
+    cached="$(LC_ALL=C awk 'NR==1 && NF==2 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/' "$cache_f" 2>/dev/null)"
+    if [ -n "$cached" ]; then
+      c_ts="${cached%% *}"; c_n="${cached##* }"
+      if [ $(( now - c_ts )) -lt "$cache_ttl" ]; then printf '%s' "$c_n"; return 0; fi
+    fi
+  fi
   mins="$(_ss_fresh_mins)"
   # (1) 実体 mtime が新鮮なもの（壊れた symlink は stat 不能で自然に除外される）
   fresh_n="$(find -L "$dir" -maxdepth 1 -name '*.output' -mmin "-$mins" 2>/dev/null | grep -c .)" || true
   case "$fresh_n" in ''|*[!0-9]*) fresh_n=0 ;; esac
   # (2) 鮮度切れだがプロセスが掴んでいるもの（沈黙中の bash bg / codex）。
-  #     完了済み .output は残留するため（実測）、lsof の引数は 40 件で頭打ちにする。
-  stale="$(find -L "$dir" -maxdepth 1 -name '*.output' ! -mmin "-$mins" 2>/dev/null | head -40)"
+  #     件数上限は置かない（Codex #54 指摘 1: lsof コストはファイル数非依存＝実測 61 件 0.32s。
+  #     上限で 41 件目以降の生存 bg を取りこぼす偽陰性のほうが害が大きい）。
+  stale="$(find -L "$dir" -maxdepth 1 -name '*.output' ! -mmin "-$mins" 2>/dev/null)"
   open_n=0
   if [ -n "$stale" ]; then
     lsof_bin="${CLAUDE_SS_LSOF:-}"
@@ -110,13 +130,22 @@ session_live_bg_count() {
       [ -n "$lsof_bin" ] || lsof_bin="/usr/sbin/lsof"
     fi
     if [ -x "$lsof_bin" ]; then
-      # -F n = open 中のパスのみ出力。同一ファイルの多重 fd を sort -u で 1 件に潰す
+      # -F an = fd ごとに a<アクセスモード> と n<パス> を出力。writer（w/u）だけを数える
+      # （Codex #54 指摘 2: tail -f やエディタ等 read-only holder を数えると 🔶 が固着する）。
+      # 同一ファイルの多重 fd は sort -u で 1 件に潰す。
       open_n="$(printf '%s\n' "$stale" | tr '\n' '\0' \
-        | xargs -0 "$lsof_bin" -F n -- 2>/dev/null | grep '^n' | sort -u | grep -c .)" || true
+        | xargs -0 "$lsof_bin" -F an -- 2>/dev/null \
+        | LC_ALL=C awk '/^a/ { m = $0 } /^n/ { if (m ~ /[wu]/) print substr($0, 2); m = "" }' \
+        | sort -u | grep -c .)" || true
       case "$open_n" in ''|*[!0-9]*) open_n=0 ;; esac
     fi
   fi
-  printf '%s' "$(( fresh_n + open_n ))"
+  fresh_n=$(( fresh_n + open_n ))
+  if [ "$cache_ttl" -gt 0 ]; then
+    { mkdir -p "$(_ss_state_dir)" 2>/dev/null \
+      && printf '%s %s\n' "$now" "$fresh_n" > "$cache_f" 2>/dev/null; } || true
+  fi
+  printf '%s' "$fresh_n"
 }
 
 # turn_state_read <session_id> → busy | wait | idle | unknown
