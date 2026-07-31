@@ -11,6 +11,13 @@ setup() {
   CLAUDE_TASKS_ROOT="$(mktemp -d)"
   CLAUDE_TURN_STATE_DIR="$(mktemp -d)"
 
+  # 実マシンの $HOME/.local/bin/ai-org-progress（進捗行に ✅ を含む）が
+  # 出力に混入すると状態アサートが偽陽性で落ちるため、HOME を空の一時 dir に分離する。
+  FAKE_HOME="$(mktemp -d)"
+
+  # live bg 判定の数秒キャッシュはテスト間で干渉するため無効化
+  export CLAUDE_SS_LIVE_CACHE_SECS=0
+
   OWN="aaaa1111-1111-1111-1111-111111111111"
   OTHER="bbbb2222-2222-2222-2222-222222222222"
   mkdir -p "$CLAUDE_TASKS_ROOT/-proj/$OWN/tasks" "$CLAUDE_TASKS_ROOT/-proj/$OTHER/tasks"
@@ -20,8 +27,8 @@ setup() {
 }
 
 teardown() {
-  rm -rf "$CLAUDE_TASKS_ROOT" "$CLAUDE_TURN_STATE_DIR"
-  unset CLAUDE_TASKS_ROOT CLAUDE_TURN_STATE_DIR
+  rm -rf "$CLAUDE_TASKS_ROOT" "$CLAUDE_TURN_STATE_DIR" "$FAKE_HOME"
+  unset CLAUDE_TASKS_ROOT CLAUDE_TURN_STATE_DIR CLAUDE_SS_LIVE_CACHE_SECS
 }
 
 _set_turn() { printf '%s 1700000000 %s\n' "$1" "$FAKE_ITERM" > "$CLAUDE_TURN_STATE_DIR/turn-$OWN.state"; }
@@ -33,7 +40,7 @@ _run_statusline() {
   json="{\"session_id\":\"$OWN\",\"workspace\":{\"current_dir\":\"/tmp/ai-org\"},\
 \"model\":{\"display_name\":\"Opus 5\"},\
 \"context_window\":{\"used_percentage\":42,\"context_window_size\":1000000}}"
-  printf '%s' "$json" | bash "$REPO_ROOT/scripts/statusline.sh" 2>/dev/null \
+  printf '%s' "$json" | HOME="$FAKE_HOME" bash "$REPO_ROOT/scripts/statusline.sh" 2>/dev/null \
     | sed $'s/\033\\[[0-9;]*m//g'
 }
 
@@ -42,6 +49,7 @@ _run_statusline() {
   _other_bg b901; _other_bg b902     # 他 terminal は動いていても自分は完了
   run _run_statusline
   [[ "$output" == *"✅ 完了"* ]]
+  [[ "$output" != *"🔶"* ]]
   [[ "$output" != *"🔵"* ]]
 }
 
@@ -61,8 +69,20 @@ _run_statusline() {
   _set_turn idle
   _own_bg b111; _own_bg b222
   run _run_statusline
-  [[ "$output" == *"🔵 bg 2"* ]]
+  [[ "$output" == *"🔶 bg 2"* ]]
   [[ "$output" == *"自動再開"* ]]
+}
+
+@test "E2E: turn ended with a running agent bg (symlink) → shows 作業中, not 完了" {
+  # 2026-07-31 オーナー実観測の真因その1: agent bg は id 長フィルタで bash_count から
+  # 除外され、完了待ちでも「✅ 完了 — 入力待ち」に転倒していた。
+  _set_turn idle
+  : > "$CLAUDE_TASKS_ROOT/-proj/$OWN/agent-live.jsonl"
+  ln -s "$CLAUDE_TASKS_ROOT/-proj/$OWN/agent-live.jsonl" \
+        "$CLAUDE_TASKS_ROOT/-proj/$OWN/tasks/a123456789abcdef0.output"
+  run _run_statusline
+  [[ "$output" == *"🔶 bg 1"* ]]
+  [[ "$output" != *"✅ 完了"* ]]
 }
 
 @test "E2E: turn running → shows 実行中" {
